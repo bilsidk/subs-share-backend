@@ -1,0 +1,22 @@
+module.exports = {
+  OWNER_EMAIL: (process.env.OWNER_EMAIL || 'bilsidk@gmail.com').toLowerCase(),
+  COINS_PER_SLOT: 10,
+  COMPLETION_DELAY_SECONDS: 45,
+  REWARDS: {
+    subscribe:       10,
+    like:            8,
+    like_comment:    10,
+    subscribe_like:  16,
+    watch:           5,
+  },
+  COMMENT_BONUS: 4,
+  MIN_WATCH_MINUTES: 1,
+  MAX_WATCH_MINUTES: 60,
+  TIER: { OWNER: 1, PREMIUM: 2, USER: 3 },
+  MIN_SECONDS_BETWEEN_TASKS: 20,
+  MAX_TASKS_PER_HOUR: 40,
+  MAX_ACCOUNTS_PER_DEVICE: 3,
+  RECLAIMS_BEFORE_BAN: 3,
+  TRUST_FLOOR_BAN: 25,
+  TRUST_PENALTY: 15,
+};
