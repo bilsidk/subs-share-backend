@@ -7,6 +7,7 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const googleSignIn = async (req, res, next) => {
   try {
     const { idToken, serverAuthCode, accessToken } = req.body;
+    console.log('[Auth] serverAuthCode received:', !!serverAuthCode, 'accessToken received:', !!accessToken);
     if (!idToken) return res.status(400).json({ error: 'idToken required' });
 
     const ticket = await client.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
