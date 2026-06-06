@@ -1,18 +1,36 @@
 module.exports = {
   OWNER_EMAIL: (process.env.OWNER_EMAIL || 'bilsidk@gmail.com').toLowerCase(),
-  COINS_PER_SLOT: 10,
-  COMPLETION_DELAY_SECONDS: 45,
+
+  // What earners receive per task type
   REWARDS: {
-    subscribe:       10,
-    like:            8,
+    subscribe:       12,
+    like:            6,
     like_comment:    10,
-    subscribe_like:  16,
-    watch:           5,
+    subscribe_like:  17,
+    watch:           4,   // base for 1 min; +1 per extra minute
   },
+
+  // What campaign owners pay per slot (earner reward + 3 coin house margin)
+  SLOT_COSTS: {
+    subscribe:       15,
+    like:            9,
+    like_comment:    13,
+    subscribe_like:  20,
+    watch:           7,   // base for 1 min; +1 per extra minute
+  },
+
+  WATCH_COST_PER_EXTRA_MIN: 1,   // added to both owner cost and earner reward
+  WATCH_REWARD_PER_EXTRA_MIN: 1,
+
   COMMENT_BONUS: 4,
+
   MIN_WATCH_MINUTES: 1,
   MAX_WATCH_MINUTES: 60,
+
+  COMPLETION_DELAY_SECONDS: 45,
+
   TIER: { OWNER: 1, PREMIUM: 2, USER: 3 },
+
   MIN_SECONDS_BETWEEN_TASKS: 20,
   MAX_TASKS_PER_HOUR: 40,
   MAX_ACCOUNTS_PER_DEVICE: 3,
