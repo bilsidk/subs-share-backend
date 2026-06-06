@@ -1,5 +1,18 @@
-const youtubeService = require('../services/youtubeService');
 const pool = require('../db/pool');
+
+// Validate that a string looks like a YouTube channel URL or handle
+function isValidChannelUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  // Accept: youtube.com/@handle, youtube.com/channel/UC..., youtu.be, etc.
+  return /^https?:\/\/(www\.)?youtube\.com\/(channel\/UC[\w-]+|@[\w.-]+|c\/[\w-]+|user\/[\w-]+)\/?$/.test(trimmed)
+      || /^@[\w.-]+$/.test(trimmed); // bare handle like @mychannel
+}
+
+function sanitizeText(str, maxLen = 100) {
+  if (!str || typeof str !== 'string') return '';
+  return str.trim().slice(0, maxLen).replace(/[<>]/g, '');
+}
 
 const addChannel = async (req, res, next) => {
   try {
@@ -9,32 +22,26 @@ const addChannel = async (req, res, next) => {
       return res.status(400).json({ error: 'youtube_channel_id, channel_name, and channel_url are required' });
     }
 
-    // Resolve handle to real UC... channel ID
-    let resolvedChannelId = youtube_channel_id;
-    if (!youtube_channel_id.startsWith('UC')) {
-      try {
-        const resolved = await youtubeService.resolveHandleToChannelId(youtube_channel_id);
-        if (resolved) resolvedChannelId = resolved;
-      } catch (e) {
-        console.error('Could not resolve channel handle:', e.message);
-      }
+    // Validate channel URL format
+    if (!isValidChannelUrl(channel_url)) {
+      return res.status(400).json({ error: 'Invalid YouTube channel URL. Use format: youtube.com/@yourhandle' });
     }
 
-    const existing = await pool.query(
-      'SELECT id FROM channels WHERE user_id = $1',
-      [req.userId]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'You already have a registered channel.' });
+    // Sanitize channel name
+    const safeName = sanitizeText(channel_name, 100);
+    if (safeName.length < 1) {
+      return res.status(400).json({ error: 'Channel name is required' });
     }
+
+    // Sanitize channel ID
+    const safeChannelId = sanitizeText(youtube_channel_id, 50);
+    const safeUrl = channel_url.trim().slice(0, 200);
 
     const result = await pool.query(
       `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
-      [req.userId, resolvedChannelId, channel_name, channel_url]
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [req.userId, safeChannelId, safeName, safeUrl]
     );
-
     res.status(201).json(result.rows[0]);
   } catch (err) {
     next(err);
