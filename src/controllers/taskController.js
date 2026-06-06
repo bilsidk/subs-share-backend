@@ -182,7 +182,7 @@ const verifyTask = async (req, res, next) => {
       try {
         if (VERIFIABLE_SUB.has(task.task_type)) {
           const subOk = await youtubeService.verifySubscription(req.userId, task.target_channel_id);
-          if (!subOk) return res.status(400).json({ verified: false, error: "Subscription not detected. Subscribe first, then try again." });
+          if (!subOk) return res.status(400).json({ verified: false, error: "Subscription not detected. Make sure you subscribed to the channel and it still exists, then try again." });
         }
         if (VERIFIABLE_LIKE.has(task.task_type)) {
           const likeOk = await youtubeService.verifyLike(req.userId, task.target_video_id);
