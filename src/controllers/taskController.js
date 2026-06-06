@@ -29,7 +29,7 @@ const getAvailableTasks = async (req, res, next) => {
     const r = await pool.query(
       `SELECT t.id, t.task_type, t.reward, t.remaining_slots, t.total_slots,
               t.target_video_id, t.target_video_url, t.watch_minutes, t.created_at,
-              c.channel_name, c.channel_url, c.youtube_channel_id,
+              c.channel_name, COALESCE(c.channel_url, '') AS channel_url, c.youtube_channel_id,
               u.name AS owner_name, u.avatar AS owner_avatar, u.role AS owner_role,
               CASE WHEN co.id IS NOT NULL THEN true ELSE false END AS already_completed,
               CASE u.role WHEN 'owner' THEN 1 WHEN 'premium' THEN 2 ELSE 3 END AS tier,
@@ -202,7 +202,7 @@ const verifyTask = async (req, res, next) => {
 
     await dbc.query('BEGIN');
     const lockRes = await dbc.query('SELECT remaining_slots FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE', [taskId]);
-    if (!lockRes.rows.length) { await dbc.query('ROLLBACK'); return res.status(409).json({ error: 'Task just ran out of slots' }); }
+    if (!lockRes.rows.length) { await dbc.query('ROLLBACK'); return res.status(409).json({ error: 'Someone just took the last slot — try another task!', code: 'CAMPAIGN_FULL' }); }
 
     await dbc.query(
       `INSERT INTO completions (task_id,user_id,verify_method,verify_status,coins_awarded,bonus_coins,
