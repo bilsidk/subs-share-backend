@@ -39,15 +39,65 @@ const googleSignIn = async (req, res, next) => {
       await pool.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,50,'bonus','Welcome bonus')`, [user.id]);
     }
 
-    if (ytAccessToken && !user.youtube_channel_id) {
-      try {
-        const chId = await youtubeService.fetchOwnChannelId(user.id);
-        if (chId) {
-          await pool.query('UPDATE users SET youtube_channel_id=$1 WHERE id=$2', [chId, user.id]);
-          user.youtube_channel_id = chId;
-        }
-      } catch (e) { console.error('fetchOwnChannelId error:', e.message); }
+   if (ytAccessToken) {
+  try {
+    const yt = require('googleapis').google.youtube({ 
+      version: 'v3', 
+      auth: (() => {
+        const oauth2 = new (require('google-auth-library').OAuth2Client)(
+          process.env.GOOGLE_CLIENT_ID, 
+          process.env.GOOGLE_CLIENT_SECRET
+        );
+        oauth2.setCredentials({ access_token: ytAccessToken });
+        return oauth2;
+      })()
+    });
+
+    const chRes = await yt.channels.list({ 
+      part: 'id,snippet', 
+      mine: true, 
+      maxResults: 1 
+    });
+    
+    const ch = chRes.data.items?.[0];
+    if (ch) {
+      const channelId = ch.id;
+      const channelName = ch.snippet.title;
+      const channelUrl = `https://www.youtube.com/channel/${channelId}`;
+
+      await pool.query(
+        'UPDATE users SET youtube_channel_id = $1 WHERE id = $2',
+        [channelId, user.id]
+      );
+
+      // Auto-register channel if not already registered
+      const existingChannel = await pool.query(
+        'SELECT id FROM channels WHERE user_id = $1',
+        [user.id]
+      );
+
+      if (!existingChannel.rows.length) {
+        await pool.query(
+          `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url)
+           VALUES ($1, $2, $3, $4)`,
+          [user.id, channelId, channelName, channelUrl]
+        );
+      } else {
+        // Update existing channel with correct ID
+        await pool.query(
+          `UPDATE channels SET youtube_channel_id = $1, channel_name = $2, channel_url = $3
+           WHERE user_id = $4`,
+          [channelId, channelName, channelUrl, user.id]
+        );
+      }
+
+      user.youtube_channel_id = channelId;
+      user.channel_name = channelName;
     }
+  } catch (e) {
+    console.error('Could not auto-register channel:', e.message);
+  }
+}
 
     const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
