@@ -182,8 +182,22 @@ const verifyTask = async (req, res, next) => {
       try {
         if (VERIFIABLE_SUB.has(task.task_type)) {
           const subOk = await youtubeService.verifySubscription(req.userId, task.target_channel_id);
-          if (!subOk) return res.status(400).json({ verified: false, error: "Subscription not detected. Make sure you subscribed to the channel and it still exists, then try again." });
-        }
+          if (!subOk) {
+  // Background check — did the channel disappear?
+  pool.query(
+    `UPDATE tasks SET status='paused'
+     WHERE id=$1 AND (
+       SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified'
+     ) = 0 AND remaining_slots = total_slots`,
+    [taskId]
+  ).catch(() => {});
+  // (auto-pause only if zero completions ever — meaning channel was likely never valid)
+
+  return res.status(400).json({
+    verified: false,
+    error: "Subscription not detected. Make sure you subscribed and the channel still exists, then try again.",
+  });
+}
         if (VERIFIABLE_LIKE.has(task.task_type)) {
           const likeOk = await youtubeService.verifyLike(req.userId, task.target_video_id);
           if (!likeOk) return res.status(400).json({ verified: false, error: "Like not detected. Like the video first, then try again." });
