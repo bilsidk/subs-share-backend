@@ -113,5 +113,5 @@ function parseVideoId(url) {
 module.exports = {
   verifySubscription, verifyLike, verifyComment,
   getVideoDuration, fetchOwnChannelId,
-  resolveHandleToChannelId, parseVideoId, parseChannelInput,
+  parseVideoId, parseChannelInput,
 };
