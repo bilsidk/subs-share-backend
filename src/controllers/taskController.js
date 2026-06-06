@@ -18,10 +18,6 @@ function tierFor(role) {
   return cfg.TIER.USER;
 }
 
-/**
- * Calculate watch task costs/rewards based on minutes.
- * Base is 1 minute. Each extra minute adds 1 coin to both sides.
- */
 function watchPricing(minutes) {
   const extraMins = Math.max(0, minutes - 1);
   return {
@@ -30,7 +26,7 @@ function watchPricing(minutes) {
   };
 }
 
-// GET /tasks — hide already-completed tasks entirely
+// GET /tasks
 const getAvailableTasks = async (req, res, next) => {
   try {
     const { type } = req.query;
@@ -52,11 +48,7 @@ const getAvailableTasks = async (req, res, next) => {
        JOIN channels c ON c.id=t.channel_id
        JOIN users u    ON u.id=c.user_id
        LEFT JOIN completions co ON co.task_id=t.id AND co.user_id=$1
-       WHERE t.status='active'
-         AND t.remaining_slots>0
-         AND c.user_id!=$1
-         AND co.id IS NULL
-         ${typeFilter}
+       WHERE t.status='active' AND t.remaining_slots>0 AND c.user_id!=$1 AND co.id IS NULL ${typeFilter}
        ORDER BY tier ASC, progress_ratio ASC, t.created_at DESC LIMIT 80`,
       params
     );
@@ -70,8 +62,12 @@ const createTask = async (req, res, next) => {
   try {
     const { channel_id, task_type='subscribe', subscribers_wanted, target_video_url, watch_minutes } = req.body;
     const slots = parseInt(subscribers_wanted, 10);
-    if (!channel_id || !slots || slots < 1)
-      return res.status(400).json({ error: 'channel_id and slot count required' });
+
+    const requiresChannel = ['subscribe', 'subscribe_like'].includes(task_type);
+    if (requiresChannel && !channel_id)
+      return res.status(400).json({ error: 'channel_id required for subscribe tasks' });
+    if (!slots || slots < 1)
+      return res.status(400).json({ error: 'Slot count required' });
     if (!cfg.REWARDS[task_type])
       return res.status(400).json({ error: 'Invalid task_type' });
 
@@ -102,8 +98,6 @@ const createTask = async (req, res, next) => {
             video_duration_sec: videoInfo.durationSec,
           });
         video_duration_sec = videoInfo.durationSec;
-
-        // Scale pricing by minutes
         const pricing = watchPricing(mins);
         taskReward = pricing.reward;
         slotCost = pricing.slotCost;
@@ -117,13 +111,14 @@ const createTask = async (req, res, next) => {
 
     await client.query('BEGIN');
 
-    const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
-    if (!chRes.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Channel not found or not yours' });
+    if (requiresChannel) {
+      const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
+      if (!chRes.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: 'Channel not found or not yours' });
+      }
     }
 
-    // Max active campaigns per user (from live settings)
     if (!isOwner) {
       const appSettings = await settings.getSettings();
       const activeCount = await client.query(
@@ -133,13 +128,9 @@ const createTask = async (req, res, next) => {
       );
       if (parseInt(activeCount.rows[0].count) >= appSettings.max_campaigns_per_user) {
         await client.query('ROLLBACK');
-        return res.status(400).json({
-          error: `Maximum ${appSettings.max_campaigns_per_user} active campaigns allowed. Complete or cancel existing ones first.`,
-        });
+        return res.status(400).json({ error: `Maximum ${appSettings.max_campaigns_per_user} active campaigns allowed.` });
       }
-    }
 
-    if (!isOwner) {
       const uRes = await client.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [req.userId]);
       if (uRes.rows[0].coins < totalCost) {
         await client.query('ROLLBACK');
@@ -152,25 +143,23 @@ const createTask = async (req, res, next) => {
       `INSERT INTO tasks (channel_id,task_type,reward,remaining_slots,total_slots,
                           target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier)
        VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [channel_id, task_type, taskReward, slots,
+      [channel_id || null, task_type, taskReward, slots,
        target_video_id, target_video_url||null,
        watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier]
     );
 
+    // Structured transaction key — frontend translates this
+    const txKey = isOwner
+      ? `tx:campaign_created|type:${task_type}|slots:${slots}|free:true`
+      : `tx:campaign_created|type:${task_type}|slots:${slots}|cost:${slotCost}`;
+
     await client.query(
       `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`,
-      [req.userId, totalCost,
-       isOwner ? `Owner campaign (free) — ${slots} slots` : `${task_type} campaign — ${slots} slots @ ${slotCost} coins/slot`]
+      [req.userId, totalCost, txKey]
     );
 
     await client.query('COMMIT');
-    res.status(201).json({
-      task: taskRes.rows[0],
-      coins_spent: totalCost,
-      slot_cost: slotCost,
-      earner_reward: taskReward,
-      owner: isOwner,
-    });
+    res.status(201).json({ task: taskRes.rows[0], coins_spent: totalCost, slot_cost: slotCost, earner_reward: taskReward, owner: isOwner });
   } catch (err) { await client.query('ROLLBACK'); next(err); }
   finally { client.release(); }
 };
@@ -190,15 +179,11 @@ const verifyTask = async (req, res, next) => {
 
     if (!started_at) return res.status(400).json({ error: 'started_at required' });
 
-    // Use live completion delay from settings
     const appSettings = await settings.getSettings();
     const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
     const elapsed = (Date.now() - started_at) / 1000;
     if (elapsed < delaySeconds)
-      return res.status(400).json({
-        error: `Wait ${Math.ceil(delaySeconds - elapsed)} more seconds`,
-        remaining: Math.ceil(delaySeconds - elapsed),
-      });
+      return res.status(400).json({ error: `Wait ${Math.ceil(delaySeconds - elapsed)} more seconds`, remaining: Math.ceil(delaySeconds - elapsed) });
 
     const taskRes = await pool.query(
       `SELECT t.*, c.user_id AS owner_id, c.youtube_channel_id AS target_channel_id
@@ -230,36 +215,24 @@ const verifyTask = async (req, res, next) => {
           const subOk = await youtubeService.verifySubscription(req.userId, task.target_channel_id);
           if (!subOk) {
             pool.query(
-              `UPDATE tasks SET status='paused'
-               WHERE id=$1
-                 AND (SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified') = 0
-                 AND remaining_slots = total_slots`,
+              `UPDATE tasks SET status='paused' WHERE id=$1
+               AND (SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified') = 0
+               AND remaining_slots = total_slots`,
               [taskId]
             ).catch(() => {});
-            return res.status(400).json({
-              verified: false,
-              error: 'Subscription not detected. Make sure you subscribed and the channel still exists, then try again.',
-            });
+            return res.status(400).json({ verified: false, error: 'Subscription not detected. Make sure you subscribed and the channel still exists, then try again.' });
           }
         }
-
         if (VERIFIABLE_LIKE.has(task.task_type)) {
           const likeOk = await youtubeService.verifyLike(req.userId, task.target_video_id);
-          if (!likeOk) {
-            return res.status(400).json({
-              verified: false,
-              error: 'Like not detected. Like the video first, then try again.',
-            });
-          }
+          if (!likeOk) return res.status(400).json({ verified: false, error: 'Like not detected. Like the video first, then try again.' });
         }
-
         if (task.task_type === 'like_comment') {
           try {
             const cr = await youtubeService.verifyComment(req.userId, task.target_video_id);
             if (cr.found) { commentVerified = true; bonusCoins = cfg.COMMENT_BONUS; }
           } catch (e) { console.error('Comment check error (non-fatal):', e.message); }
         }
-
         await settings.recordApiSuccess();
       } catch (e) {
         const status = e.code === 'NO_YOUTUBE_ACCESS' ? 'noaccess'
@@ -277,10 +250,7 @@ const verifyTask = async (req, res, next) => {
     const totalCoins = task.reward + bonusCoins;
 
     await dbc.query('BEGIN');
-    const lockRes = await dbc.query(
-      'SELECT remaining_slots FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE',
-      [taskId]
-    );
+    const lockRes = await dbc.query('SELECT remaining_slots FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE', [taskId]);
     if (!lockRes.rows.length) {
       await dbc.query('ROLLBACK');
       return res.status(409).json({ error: 'Someone just took the last slot — try another task!', code: 'CAMPAIGN_FULL' });
@@ -300,12 +270,15 @@ const verifyTask = async (req, res, next) => {
       [taskId]
     );
     await dbc.query('UPDATE users SET coins=coins+$1 WHERE id=$2', [totalCoins, req.userId]);
+
+    // Structured transaction key
+    const txKey = commentVerified
+      ? `tx:task_completed_comment|type:${task.task_type}|bonus:${bonusCoins}`
+      : `tx:task_completed|type:${task.task_type}`;
+
     await dbc.query(
       `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'earned',$3)`,
-      [req.userId, totalCoins,
-       commentVerified
-         ? `${task.task_type} — like ✅ + comment ✅ (+${bonusCoins} bonus)`
-         : `${task.task_type} task completed`]
+      [req.userId, totalCoins, txKey]
     );
     await dbc.query('COMMIT');
 
