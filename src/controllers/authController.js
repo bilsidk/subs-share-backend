@@ -23,7 +23,7 @@ const googleSignIn = async (req, res, next) => {
         const oauth2 = new OAuth2Client(
           process.env.GOOGLE_CLIENT_ID,
           process.env.GOOGLE_CLIENT_SECRET,
-          'postmessage' // Required for mobile auth code exchange
+          'urn:ietf:wg:oauth:2.0:oob' // Required for React Native mobile
         );
         const { tokens } = await oauth2.getToken(serverAuthCode);
         if (tokens.access_token)  ytAccessToken  = tokens.access_token;
