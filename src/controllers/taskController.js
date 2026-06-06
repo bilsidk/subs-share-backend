@@ -18,7 +18,19 @@ function tierFor(role) {
   return cfg.TIER.USER;
 }
 
-// GET /tasks
+/**
+ * Calculate watch task costs/rewards based on minutes.
+ * Base is 1 minute. Each extra minute adds 1 coin to both sides.
+ */
+function watchPricing(minutes) {
+  const extraMins = Math.max(0, minutes - 1);
+  return {
+    reward:   cfg.REWARDS.watch   + (extraMins * cfg.WATCH_REWARD_PER_EXTRA_MIN),
+    slotCost: cfg.SLOT_COSTS.watch + (extraMins * cfg.WATCH_COST_PER_EXTRA_MIN),
+  };
+}
+
+// GET /tasks — hide already-completed tasks entirely
 const getAvailableTasks = async (req, res, next) => {
   try {
     const { type } = req.query;
@@ -31,7 +43,6 @@ const getAvailableTasks = async (req, res, next) => {
               t.target_video_id, t.target_video_url, t.watch_minutes, t.created_at,
               c.channel_name, COALESCE(c.channel_url, '') AS channel_url, c.youtube_channel_id,
               u.name AS owner_name, u.avatar AS owner_avatar, u.role AS owner_role,
-              CASE WHEN co.id IS NOT NULL THEN true ELSE false END AS already_completed,
               CASE u.role WHEN 'owner' THEN 1 WHEN 'premium' THEN 2 ELSE 3 END AS tier,
               CASE WHEN COALESCE(t.total_slots,t.remaining_slots)>0
                    THEN (COALESCE(t.total_slots,t.remaining_slots)-t.remaining_slots)::float
@@ -41,7 +52,11 @@ const getAvailableTasks = async (req, res, next) => {
        JOIN channels c ON c.id=t.channel_id
        JOIN users u    ON u.id=c.user_id
        LEFT JOIN completions co ON co.task_id=t.id AND co.user_id=$1
-       WHERE t.status='active' AND t.remaining_slots>0 AND c.user_id!=$1 ${typeFilter}
+       WHERE t.status='active'
+         AND t.remaining_slots>0
+         AND c.user_id!=$1
+         AND co.id IS NULL
+         ${typeFilter}
        ORDER BY tier ASC, progress_ratio ASC, t.created_at DESC LIMIT 80`,
       params
     );
@@ -62,6 +77,8 @@ const createTask = async (req, res, next) => {
 
     let target_video_id = null;
     let video_duration_sec = null;
+    let taskReward = cfg.REWARDS[task_type];
+    let slotCost = cfg.SLOT_COSTS[task_type];
 
     if (task_type !== 'subscribe') {
       if (!target_video_url)
@@ -85,12 +102,17 @@ const createTask = async (req, res, next) => {
             video_duration_sec: videoInfo.durationSec,
           });
         video_duration_sec = videoInfo.durationSec;
+
+        // Scale pricing by minutes
+        const pricing = watchPricing(mins);
+        taskReward = pricing.reward;
+        slotCost = pricing.slotCost;
       }
     }
 
     const me = await getUserMeta(req.userId);
     const isOwner = me.role === 'owner' || me.email?.toLowerCase() === cfg.OWNER_EMAIL;
-    const totalCost = isOwner ? 0 : slots * cfg.COINS_PER_SLOT;
+    const totalCost = isOwner ? 0 : slots * slotCost;
     const ownerTier = tierFor(isOwner ? 'owner' : me.role);
 
     await client.query('BEGIN');
@@ -101,16 +123,19 @@ const createTask = async (req, res, next) => {
       return res.status(403).json({ error: 'Channel not found or not yours' });
     }
 
-    // Max 5 active campaigns per non-owner user
+    // Max active campaigns per user (from live settings)
     if (!isOwner) {
+      const appSettings = await settings.getSettings();
       const activeCount = await client.query(
         `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
          WHERE c.user_id=$1 AND t.status IN ('active','paused')`,
         [req.userId]
       );
-      if (parseInt(activeCount.rows[0].count) >= 5) {
+      if (parseInt(activeCount.rows[0].count) >= appSettings.max_campaigns_per_user) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ error: 'Maximum 5 active campaigns allowed. Complete or cancel existing ones first.' });
+        return res.status(400).json({
+          error: `Maximum ${appSettings.max_campaigns_per_user} active campaigns allowed. Complete or cancel existing ones first.`,
+        });
       }
     }
 
@@ -127,17 +152,25 @@ const createTask = async (req, res, next) => {
       `INSERT INTO tasks (channel_id,task_type,reward,remaining_slots,total_slots,
                           target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier)
        VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [channel_id, task_type, cfg.REWARDS[task_type], slots,
-       target_video_id, target_video_url||null, watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier]
+      [channel_id, task_type, taskReward, slots,
+       target_video_id, target_video_url||null,
+       watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier]
     );
 
     await client.query(
       `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`,
-      [req.userId, totalCost, isOwner ? `Owner campaign (free) — ${slots} slots` : `${task_type} campaign — ${slots} slots`]
+      [req.userId, totalCost,
+       isOwner ? `Owner campaign (free) — ${slots} slots` : `${task_type} campaign — ${slots} slots @ ${slotCost} coins/slot`]
     );
 
     await client.query('COMMIT');
-    res.status(201).json({ task: taskRes.rows[0], coins_spent: totalCost, owner: isOwner });
+    res.status(201).json({
+      task: taskRes.rows[0],
+      coins_spent: totalCost,
+      slot_cost: slotCost,
+      earner_reward: taskReward,
+      owner: isOwner,
+    });
   } catch (err) { await client.query('ROLLBACK'); next(err); }
   finally { client.release(); }
 };
@@ -156,11 +189,15 @@ const verifyTask = async (req, res, next) => {
     } catch (e) { return res.status(e.status||403).json({ error: e.message, code: e.code }); }
 
     if (!started_at) return res.status(400).json({ error: 'started_at required' });
+
+    // Use live completion delay from settings
+    const appSettings = await settings.getSettings();
+    const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
     const elapsed = (Date.now() - started_at) / 1000;
-    if (elapsed < cfg.COMPLETION_DELAY_SECONDS)
+    if (elapsed < delaySeconds)
       return res.status(400).json({
-        error: `Wait ${Math.ceil(cfg.COMPLETION_DELAY_SECONDS-elapsed)} more seconds`,
-        remaining: Math.ceil(cfg.COMPLETION_DELAY_SECONDS-elapsed),
+        error: `Wait ${Math.ceil(delaySeconds - elapsed)} more seconds`,
+        remaining: Math.ceil(delaySeconds - elapsed),
       });
 
     const taskRes = await pool.query(
@@ -189,11 +226,9 @@ const verifyTask = async (req, res, next) => {
     if (!degraded && task.task_type !== 'watch') {
       verifyMethod = 'api';
       try {
-        // Subscribe check
         if (VERIFIABLE_SUB.has(task.task_type)) {
           const subOk = await youtubeService.verifySubscription(req.userId, task.target_channel_id);
           if (!subOk) {
-            // Auto-pause if channel was never valid
             pool.query(
               `UPDATE tasks SET status='paused'
                WHERE id=$1
@@ -208,7 +243,6 @@ const verifyTask = async (req, res, next) => {
           }
         }
 
-        // Like check
         if (VERIFIABLE_LIKE.has(task.task_type)) {
           const likeOk = await youtubeService.verifyLike(req.userId, task.target_video_id);
           if (!likeOk) {
@@ -219,7 +253,6 @@ const verifyTask = async (req, res, next) => {
           }
         }
 
-        // Comment check (bonus, non-blocking)
         if (task.task_type === 'like_comment') {
           try {
             const cr = await youtubeService.verifyComment(req.userId, task.target_video_id);
@@ -232,20 +265,12 @@ const verifyTask = async (req, res, next) => {
         const status = e.code === 'NO_YOUTUBE_ACCESS' ? 'noaccess'
                      : (e.code === 401 || e.response?.status === 401) ? 401
                      : e.response?.status || 'other';
-        if (status === 'noaccess') {
-          return res.status(403).json({ error: 'YouTube access required. Sign out and sign in again.', code: 'NO_YOUTUBE_ACCESS' });
-        }
-        if (status === 401) {
-          await settings.recordApiFailure('401');
-          return res.status(401).json({ error: 'YouTube session expired. Sign in again.', code: 'YOUTUBE_REAUTH' });
-        }
+        if (status === 'noaccess') return res.status(403).json({ error: 'YouTube access required. Sign out and sign in again.', code: 'NO_YOUTUBE_ACCESS' });
+        if (status === 401) { await settings.recordApiFailure('401'); return res.status(401).json({ error: 'YouTube session expired. Sign in again.', code: 'YOUTUBE_REAUTH' }); }
         await settings.recordApiFailure(String(status));
         const after = await settings.getMode();
-        if (after.mode === 'degraded') {
-          verifyMethod = 'honor';
-        } else {
-          return res.status(502).json({ error: 'Could not verify right now. Try again shortly.', code: 'VERIFY_RETRY' });
-        }
+        if (after.mode === 'degraded') { verifyMethod = 'honor'; }
+        else return res.status(502).json({ error: 'Could not verify right now. Try again shortly.', code: 'VERIFY_RETRY' });
       }
     }
 
