@@ -70,8 +70,8 @@ const createTask = async (req, res, next) => {
   try {
     const { channel_id, task_type='subscribe', subscribers_wanted, target_video_url, watch_minutes } = req.body;
     const slots = parseInt(subscribers_wanted, 10);
-    if (!channel_id || !slots || slots < 1)
-      return res.status(400).json({ error: 'channel_id and slot count required' });
+    if (!slots || slots < 1)
+  return res.status(400).json({ error: 'Slot count required' });
     if (!cfg.REWARDS[task_type])
       return res.status(400).json({ error: 'Invalid task_type' });
 
@@ -117,10 +117,18 @@ const createTask = async (req, res, next) => {
 
     await client.query('BEGIN');
 
-    const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
-    if (!chRes.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Channel not found or not yours' });
+    const requiresChannel = ['subscribe', 'subscribe_like'].includes(task_type);
+if (requiresChannel) {
+  if (!channel_id) {
+    await client.query('ROLLBACK');
+    return res.status(400).json({ error: 'channel_id required for subscribe tasks' });
+  }
+  const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
+  if (!chRes.rows.length) {
+    await client.query('ROLLBACK');
+    return res.status(403).json({ error: 'Channel not found or not yours' });
+  }
+}
     }
 
     // Max active campaigns per user (from live settings)
