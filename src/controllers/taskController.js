@@ -97,7 +97,17 @@ const createTask = async (req, res, next) => {
 
     const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
     if (!chRes.rows.length) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'Channel not found or not yours' }); }
-
+    if (!isOwner) {
+  const activeCount = await client.query(
+    `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
+     WHERE c.user_id=$1 AND t.status IN ('active','paused')`,
+    [req.userId]
+  );
+  if (parseInt(activeCount.rows[0].count) >= 5) {
+    await client.query('ROLLBACK');
+    return res.status(400).json({ error: 'Maximum 5 active campaigns allowed. Complete or cancel existing ones first.' });
+  }
+}
     if (!isOwner) {
       const uRes = await client.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [req.userId]);
       if (uRes.rows[0].coins < totalCost) {
