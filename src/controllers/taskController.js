@@ -96,18 +96,24 @@ const createTask = async (req, res, next) => {
     await client.query('BEGIN');
 
     const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
-    if (!chRes.rows.length) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'Channel not found or not yours' }); }
+    if (!chRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Channel not found or not yours' });
+    }
+
+    // Max 5 active campaigns per non-owner user
     if (!isOwner) {
-  const activeCount = await client.query(
-    `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
-     WHERE c.user_id=$1 AND t.status IN ('active','paused')`,
-    [req.userId]
-  );
-  if (parseInt(activeCount.rows[0].count) >= 5) {
-    await client.query('ROLLBACK');
-    return res.status(400).json({ error: 'Maximum 5 active campaigns allowed. Complete or cancel existing ones first.' });
-  }
-}
+      const activeCount = await client.query(
+        `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
+         WHERE c.user_id=$1 AND t.status IN ('active','paused')`,
+        [req.userId]
+      );
+      if (parseInt(activeCount.rows[0].count) >= 5) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Maximum 5 active campaigns allowed. Complete or cancel existing ones first.' });
+      }
+    }
+
     if (!isOwner) {
       const uRes = await client.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [req.userId]);
       if (uRes.rows[0].coins < totalCost) {
@@ -152,7 +158,10 @@ const verifyTask = async (req, res, next) => {
     if (!started_at) return res.status(400).json({ error: 'started_at required' });
     const elapsed = (Date.now() - started_at) / 1000;
     if (elapsed < cfg.COMPLETION_DELAY_SECONDS)
-      return res.status(400).json({ error: `Wait ${Math.ceil(cfg.COMPLETION_DELAY_SECONDS-elapsed)} more seconds`, remaining: Math.ceil(cfg.COMPLETION_DELAY_SECONDS-elapsed) });
+      return res.status(400).json({
+        error: `Wait ${Math.ceil(cfg.COMPLETION_DELAY_SECONDS-elapsed)} more seconds`,
+        remaining: Math.ceil(cfg.COMPLETION_DELAY_SECONDS-elapsed),
+      });
 
     const taskRes = await pool.query(
       `SELECT t.*, c.user_id AS owner_id, c.youtube_channel_id AS target_channel_id
@@ -180,59 +189,83 @@ const verifyTask = async (req, res, next) => {
     if (!degraded && task.task_type !== 'watch') {
       verifyMethod = 'api';
       try {
+        // Subscribe check
         if (VERIFIABLE_SUB.has(task.task_type)) {
           const subOk = await youtubeService.verifySubscription(req.userId, task.target_channel_id);
           if (!subOk) {
-  // Background check — did the channel disappear?
-  pool.query(
-    `UPDATE tasks SET status='paused'
-     WHERE id=$1 AND (
-       SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified'
-     ) = 0 AND remaining_slots = total_slots`,
-    [taskId]
-  ).catch(() => {});
-  // (auto-pause only if zero completions ever — meaning channel was likely never valid)
+            // Auto-pause if channel was never valid
+            pool.query(
+              `UPDATE tasks SET status='paused'
+               WHERE id=$1
+                 AND (SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified') = 0
+                 AND remaining_slots = total_slots`,
+              [taskId]
+            ).catch(() => {});
+            return res.status(400).json({
+              verified: false,
+              error: 'Subscription not detected. Make sure you subscribed and the channel still exists, then try again.',
+            });
+          }
+        }
 
-  return res.status(400).json({
-    verified: false,
-    error: "Subscription not detected. Make sure you subscribed and the channel still exists, then try again.",
-  });
-}
+        // Like check
         if (VERIFIABLE_LIKE.has(task.task_type)) {
           const likeOk = await youtubeService.verifyLike(req.userId, task.target_video_id);
-          if (!likeOk) return res.status(400).json({ verified: false, error: "Like not detected. Like the video first, then try again." });
+          if (!likeOk) {
+            return res.status(400).json({
+              verified: false,
+              error: 'Like not detected. Like the video first, then try again.',
+            });
+          }
         }
+
+        // Comment check (bonus, non-blocking)
         if (task.task_type === 'like_comment') {
           try {
             const cr = await youtubeService.verifyComment(req.userId, task.target_video_id);
             if (cr.found) { commentVerified = true; bonusCoins = cfg.COMMENT_BONUS; }
           } catch (e) { console.error('Comment check error (non-fatal):', e.message); }
         }
+
         await settings.recordApiSuccess();
       } catch (e) {
         const status = e.code === 'NO_YOUTUBE_ACCESS' ? 'noaccess'
                      : (e.code === 401 || e.response?.status === 401) ? 401
                      : e.response?.status || 'other';
-        if (status === 'noaccess') return res.status(403).json({ error: 'YouTube access required. Sign out and sign in again.', code: 'NO_YOUTUBE_ACCESS' });
-        if (status === 401) { await settings.recordApiFailure('401'); return res.status(401).json({ error: 'YouTube session expired. Sign in again.', code: 'YOUTUBE_REAUTH' }); }
+        if (status === 'noaccess') {
+          return res.status(403).json({ error: 'YouTube access required. Sign out and sign in again.', code: 'NO_YOUTUBE_ACCESS' });
+        }
+        if (status === 401) {
+          await settings.recordApiFailure('401');
+          return res.status(401).json({ error: 'YouTube session expired. Sign in again.', code: 'YOUTUBE_REAUTH' });
+        }
         await settings.recordApiFailure(String(status));
         const after = await settings.getMode();
-        if (after.mode === 'degraded') { verifyMethod = 'honor'; }
-        else return res.status(502).json({ error: 'Could not verify right now. Try again shortly.', code: 'VERIFY_RETRY' });
+        if (after.mode === 'degraded') {
+          verifyMethod = 'honor';
+        } else {
+          return res.status(502).json({ error: 'Could not verify right now. Try again shortly.', code: 'VERIFY_RETRY' });
+        }
       }
     }
 
     const totalCoins = task.reward + bonusCoins;
 
     await dbc.query('BEGIN');
-    const lockRes = await dbc.query('SELECT remaining_slots FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE', [taskId]);
-    if (!lockRes.rows.length) { await dbc.query('ROLLBACK'); return res.status(409).json({ error: 'Someone just took the last slot — try another task!', code: 'CAMPAIGN_FULL' }); }
+    const lockRes = await dbc.query(
+      'SELECT remaining_slots FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE',
+      [taskId]
+    );
+    if (!lockRes.rows.length) {
+      await dbc.query('ROLLBACK');
+      return res.status(409).json({ error: 'Someone just took the last slot — try another task!', code: 'CAMPAIGN_FULL' });
+    }
 
     await dbc.query(
       `INSERT INTO completions (task_id,user_id,verify_method,verify_status,coins_awarded,bonus_coins,
               comment_verified,last_audit_at,target_channel_id,target_video_id,task_type)
        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10)`,
-      [taskId, req.userId, verifyMethod, verifyMethod==='api'?'verified':'pending',
+      [taskId, req.userId, verifyMethod, verifyMethod==='api' ? 'verified' : 'pending',
        totalCoins, bonusCoins, commentVerified,
        task.target_channel_id, task.target_video_id, task.task_type]
     );
@@ -244,7 +277,10 @@ const verifyTask = async (req, res, next) => {
     await dbc.query('UPDATE users SET coins=coins+$1 WHERE id=$2', [totalCoins, req.userId]);
     await dbc.query(
       `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'earned',$3)`,
-      [req.userId, totalCoins, commentVerified ? `${task.task_type} — like ✅ + comment ✅ (+${bonusCoins} bonus)` : `${task.task_type} task completed`]
+      [req.userId, totalCoins,
+       commentVerified
+         ? `${task.task_type} — like ✅ + comment ✅ (+${bonusCoins} bonus)`
+         : `${task.task_type} task completed`]
     );
     await dbc.query('COMMIT');
 
@@ -258,7 +294,7 @@ const verifyTask = async (req, res, next) => {
       comment_verified: commentVerified, new_balance: bal.rows[0].coins,
       message: commentVerified
         ? `✅ Like & Comment verified! +${totalCoins} coins (includes +${bonusCoins} comment bonus)`
-        : verifyMethod==='api' ? `✅ Verified by YouTube! +${totalCoins} coins`
+        : verifyMethod === 'api' ? `✅ Verified by YouTube! +${totalCoins} coins`
         : degraded ? `⚠️ Verification offline — coins awarded, may be checked later.`
         : `Coins awarded. This task may be spot-checked.`,
     });
