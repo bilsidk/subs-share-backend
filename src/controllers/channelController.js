@@ -1,3 +1,4 @@
+const youtubeService = require('../services/youtubeService');
 const pool = require('../db/pool');
 
 const addChannel = async (req, res, next) => {
