@@ -110,4 +110,8 @@ function parseVideoId(url) {
   return null;
 }
 
-module.exports = { verifySubscription, verifyLike, verifyComment, getVideoDuration, fetchOwnChannelId, parseVideoId };
+module.exports = {
+  verifySubscription, verifyLike, verifyComment,
+  getVideoDuration, fetchOwnChannelId,
+  resolveHandleToChannelId, parseVideoId, parseChannelInput,
+};
