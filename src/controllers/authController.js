@@ -19,6 +19,7 @@ const googleSignIn = async (req, res, next) => {
 
     if (accessToken) {
   ytAccessToken = accessToken;
+  ytExpiry = new Date(Date.now() + 3600 * 1000); // 1 hour from now
 }
 
     const result = await pool.query(
