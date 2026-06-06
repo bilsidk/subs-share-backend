@@ -17,15 +17,9 @@ const googleSignIn = async (req, res, next) => {
     let ytRefreshToken = null;
     let ytExpiry = null;
 
-    if (serverAuthCode) {
-      try {
-        const oauth = new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, 'postmessage');
-        const { tokens } = await oauth.getToken(serverAuthCode);
-        ytAccessToken   = tokens.access_token || ytAccessToken;
-        ytRefreshToken  = tokens.refresh_token || null;
-        ytExpiry        = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
-      } catch (e) { console.error('serverAuthCode exchange failed:', e.message); }
-    }
+    if (accessToken) {
+  ytAccessToken = accessToken;
+}
 
     const result = await pool.query(
       `INSERT INTO users (google_id, email, name, avatar, youtube_access_token, youtube_refresh_token, youtube_token_expiry)
