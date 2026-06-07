@@ -93,6 +93,19 @@ function parseDuration(iso) {
   return (parseInt(m[1] || 0) * 3600) + (parseInt(m[2] || 0) * 60) + parseInt(m[3] || 0);
 }
 
+async function getSubscriberCount(channelId) {
+  if (!channelId) return 0;
+  try {
+    const yt = google.youtube({ version: 'v3', auth: process.env.YOUTUBE_API_KEY });
+    const res = await yt.channels.list({ part: 'statistics', id: channelId });
+    const count = res.data.items?.[0]?.statistics?.subscriberCount;
+    return count ? parseInt(count, 10) : 0;
+  } catch (e) {
+    console.error('[YouTube] getSubscriberCount failed:', e.message);
+    return 0;
+  }
+}
+
 async function fetchOwnChannelId(userId) {
   const yt = await getYouTubeClient(userId);
   const res = await yt.channels.list({ part: 'id', mine: true, maxResults: 1 });
@@ -110,6 +123,6 @@ function parseVideoId(url) {
 
 module.exports = {
   verifySubscription, verifyLike, verifyComment,
-  getVideoDuration, fetchOwnChannelId,
+  getVideoDuration, fetchOwnChannelId, getSubscriberCount,
   parseVideoId,
 };

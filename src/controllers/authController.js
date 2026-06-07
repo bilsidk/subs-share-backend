@@ -104,19 +104,21 @@ const googleSignIn = async (req, res, next) => {
           const channelId   = ch.id;
           const channelName = ch.snippet.title;
           const channelUrl  = `https://www.youtube.com/channel/${channelId}`;
+          const { getSubscriberCount } = require('../services/youtubeService');
+          const subscriberCount = await getSubscriberCount(channelId);
 
           await pool.query('UPDATE users SET youtube_channel_id=$1 WHERE id=$2', [channelId, user.id]);
 
           const existing = await pool.query('SELECT id FROM channels WHERE user_id=$1', [user.id]);
           if (!existing.rows.length) {
             await pool.query(
-              `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url) VALUES ($1,$2,$3,$4)`,
-              [user.id, channelId, channelName, channelUrl]
+              `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url, subscriber_count) VALUES ($1,$2,$3,$4,$5)`,
+              [user.id, channelId, channelName, channelUrl, subscriberCount]
             );
           } else {
             await pool.query(
-              `UPDATE channels SET youtube_channel_id=$1, channel_name=$2, channel_url=$3 WHERE user_id=$4`,
-              [channelId, channelName, channelUrl, user.id]
+              `UPDATE channels SET youtube_channel_id=$1, channel_name=$2, channel_url=$3, subscriber_count=$4 WHERE user_id=$5`,
+              [channelId, channelName, channelUrl, subscriberCount, user.id]
             );
           }
           user.youtube_channel_id = channelId;

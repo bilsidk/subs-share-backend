@@ -1,4 +1,5 @@
 const pool = require('../db/pool');
+const { getSubscriberCount } = require('../services/youtubeService');
 
 // Validate that a string looks like a YouTube channel URL or handle
 function isValidChannelUrl(url) {
@@ -37,10 +38,11 @@ const addChannel = async (req, res, next) => {
     const safeChannelId = sanitizeText(youtube_channel_id, 50);
     const safeUrl = channel_url.trim().slice(0, 200);
 
+    const subscriberCount = await getSubscriberCount(safeChannelId);
     const result = await pool.query(
-      `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [req.userId, safeChannelId, safeName, safeUrl]
+      `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url, subscriber_count)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.userId, safeChannelId, safeName, safeUrl, subscriberCount]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
