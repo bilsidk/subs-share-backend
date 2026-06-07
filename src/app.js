@@ -71,9 +71,10 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().
 app.use('/auth',         authLimiter,    authRoutes);
 app.use('/users',                        userRoutes);
 app.use('/channels',                     channelRoutes);
+// Rate limiters MUST be registered before the route handler, not after
+app.use('/tasks/:id/verify', verifyLimiter);
+app.use('/tasks',        campaignLimiter);
 app.use('/tasks',                        taskRoutes);
-app.use('/tasks/:id/verify', verifyLimiter);   // extra limit on verify endpoint
-app.use('/tasks',        campaignLimiter);      // also limits campaign creation
 app.use('/transactions',                 transactionRoutes);
 app.use('/admin',        adminLimiter,   adminRoutes);
 

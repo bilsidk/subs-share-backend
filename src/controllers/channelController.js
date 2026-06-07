@@ -52,7 +52,7 @@ const getMyChannels = async (req, res, next) => {
   try {
     const r = await pool.query(
       `SELECT c.*,
-              COUNT(DISTINCT t.id) AS active_campaigns,
+              COUNT(DISTINCT CASE WHEN t.status='active' THEN t.id END) AS active_campaigns,
               COALESCE(SUM(CASE WHEN t.status='active' THEN t.remaining_slots ELSE 0 END),0) AS pending_subscribers
        FROM channels c LEFT JOIN tasks t ON t.channel_id=c.id
        WHERE c.user_id=$1 GROUP BY c.id ORDER BY c.created_at DESC`,

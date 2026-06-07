@@ -35,11 +35,9 @@ async function getYouTubeClient(userId) {
 
 async function verifySubscription(userId, targetChannelId) {
   const yt = await getYouTubeClient(userId);
-  console.log('Verifying subscription userId:', userId, 'channelId:', targetChannelId);
   const res = await yt.subscriptions.list({
     part: 'snippet', mine: true, forChannelId: targetChannelId, maxResults: 1,
   });
-  console.log('Subscription result items:', res.data.items?.length || 0);
   return (res.data.items || []).length > 0;
 }
 async function verifyLike(userId, videoId) {

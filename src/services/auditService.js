@@ -29,7 +29,7 @@ async function reclaim(c) {
     await dbc.query('BEGIN');
     await dbc.query(`UPDATE completions SET verify_status='reclaimed', last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE WHERE id=$1`, [c.id]);
     await dbc.query('UPDATE users SET coins=GREATEST(0,coins-$1) WHERE id=$2', [c.coins_awarded, c.user_id]);
-    await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`, [c.user_id, c.coins_awarded, `Reclaimed — ${c.task_type} undone`]);
+    await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`, [c.user_id, c.coins_awarded, `tx:coins_reclaimed|type:${c.task_type}`]);
     await dbc.query('COMMIT');
   } catch (e) { await dbc.query('ROLLBACK'); console.error('[AUDIT] reclaim failed', c.id, e.message); }
   finally { dbc.release(); }
