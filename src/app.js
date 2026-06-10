@@ -13,7 +13,7 @@ const { errorHandler }  = require('./middleware/errorHandler');
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet());
-app.use(cors({ origin: process.env.ALLOWED_ORIGINS?.split(',') || '*' }));
+app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : false }));
 app.use(express.json({ limit: '10kb' }));
 
 // ── Rate limiters ────────────────────────────────────────────
@@ -71,9 +71,11 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().
 app.use('/auth',         authLimiter,    authRoutes);
 app.use('/users',                        userRoutes);
 app.use('/channels',                     channelRoutes);
-// Rate limiters MUST be registered before the route handler, not after
-app.use('/tasks/:id/verify', verifyLimiter);
-app.use('/tasks',        campaignLimiter);
+// verifyLimiter applies only to verify/complete endpoints
+// campaignLimiter applies only to POST /tasks (campaign creation)
+app.post('/tasks/:id/verify',   verifyLimiter);
+app.post('/tasks/:id/complete', verifyLimiter);
+app.post('/tasks',              campaignLimiter);
 app.use('/tasks',                        taskRoutes);
 app.use('/transactions',                 transactionRoutes);
 app.use('/admin',        adminLimiter,   adminRoutes);

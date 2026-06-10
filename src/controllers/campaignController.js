@@ -47,14 +47,15 @@ const cancelCampaign = async (req, res, next) => {
       return res.status(400).json({ error: `Campaign is already ${task.status}` });
 
     const isAppOwner = task.role==='owner' || task.email?.toLowerCase()===cfg.OWNER_EMAIL;
-    const refundCoins = isAppOwner ? 0 : task.remaining_slots * cfg.COINS_PER_SLOT;
+    const slotCost = cfg.SLOT_COSTS[task.task_type] || 0;
+    const refundCoins = isAppOwner ? 0 : task.remaining_slots * slotCost;
 
     await client.query('BEGIN');
     await client.query('UPDATE tasks SET status=\'cancelled\' WHERE id=$1', [taskId]);
     if (refundCoins > 0) {
       await client.query('UPDATE users SET coins=coins+$1 WHERE id=$2', [refundCoins, req.userId]);
       await client.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'earned',$3)`,
-        [req.userId, refundCoins, `Refund — campaign #${taskId} cancelled (${task.remaining_slots} slots)`]);
+        [req.userId, refundCoins, `tx:campaign_cancelled|type:${task.task_type}|slots:${task.remaining_slots}|refund:${refundCoins}`]);
     }
     await client.query('COMMIT');
     const bal = await pool.query('SELECT coins FROM users WHERE id=$1', [req.userId]);

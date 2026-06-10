@@ -96,4 +96,52 @@ const setRole = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getStatus, getAppSettings, updateAppSettings, setModeManual, setRole };
+// GET /admin/users?email=&page=
+const getUsers = async (req, res, next) => {
+  try {
+    if (!(await requireOwner(req, res))) return;
+    const page  = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = 50;
+    const offset = (page - 1) * limit;
+    const email = req.query.email ? `%${req.query.email.toLowerCase()}%` : null;
+    const where = email ? 'WHERE LOWER(email) LIKE $3' : '';
+    const params = email ? [limit, offset, email] : [limit, offset];
+    const r = await pool.query(
+      `SELECT id, email, name, role, coins, is_banned, ban_reason, trust_score,
+              reclaim_count, created_at,
+              (SELECT COUNT(*) FROM completions WHERE user_id=users.id) AS tasks_completed
+       FROM users ${where}
+       ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+      params
+    );
+    const total = await pool.query(`SELECT COUNT(*) FROM users ${where}`, email ? [email] : []);
+    res.json({ users: r.rows, total: parseInt(total.rows[0].count), page, pages: Math.ceil(total.rows[0].count / limit) });
+  } catch (err) { next(err); }
+};
+
+// POST /admin/ban  { email, reason }
+const banUser = async (req, res, next) => {
+  try {
+    if (!(await requireOwner(req, res))) return;
+    const { email, reason, unban } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    if (unban) {
+      const r = await pool.query(
+        `UPDATE users SET is_banned=FALSE, ban_reason=NULL, banned_at=NULL
+         WHERE LOWER(email)=LOWER($1) RETURNING id, email, is_banned`,
+        [email]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+      return res.json({ ok: true, user: r.rows[0] });
+    }
+    const r = await pool.query(
+      `UPDATE users SET is_banned=TRUE, ban_reason=$2, banned_at=NOW()
+       WHERE LOWER(email)=LOWER($1) RETURNING id, email, is_banned, ban_reason`,
+      [email, reason || 'Banned by admin']
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true, user: r.rows[0] });
+  } catch (err) { next(err); }
+};
+
+module.exports = { getStatus, getAppSettings, updateAppSettings, setModeManual, setRole, getUsers, banUser };
