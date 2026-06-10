@@ -11,6 +11,12 @@ async function getYouTubeClient(userId) {
   if (!youtube_access_token) {
     const e = new Error('YouTube access not granted'); e.code = 'NO_YOUTUBE_ACCESS'; throw e;
   }
+  // Token expired with no refresh token → user must re-authenticate
+  const isExpired = youtube_token_expiry && new Date(youtube_token_expiry).getTime() < Date.now();
+  if (isExpired && !youtube_refresh_token) {
+    const e = new Error('YouTube session expired — please sign in again');
+    e.code = 'NO_YOUTUBE_ACCESS'; throw e;
+  }
   const oauth2 = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
   oauth2.setCredentials({
     access_token: youtube_access_token,
@@ -33,18 +39,32 @@ async function getYouTubeClient(userId) {
   return google.youtube({ version: 'v3', auth: oauth2 });
 }
 
+function rethrowAuthError(e) {
+  const msg = e.message || '';
+  const isAuthErr = e.response?.status === 401
+    || msg.includes('No refresh token')
+    || msg.includes('invalid_grant')
+    || msg.includes('Token has been expired');
+  if (isAuthErr) { const ae = new Error('YouTube session expired — please sign in again'); ae.code = 'NO_YOUTUBE_ACCESS'; throw ae; }
+  throw e;
+}
+
 async function verifySubscription(userId, targetChannelId) {
   const yt = await getYouTubeClient(userId);
-  const res = await yt.subscriptions.list({
-    part: 'snippet', mine: true, forChannelId: targetChannelId, maxResults: 1,
-  });
-  return (res.data.items || []).length > 0;
+  try {
+    const res = await yt.subscriptions.list({
+      part: 'snippet', mine: true, forChannelId: targetChannelId, maxResults: 1,
+    });
+    return (res.data.items || []).length > 0;
+  } catch (e) { rethrowAuthError(e); }
 }
 async function verifyLike(userId, videoId) {
   const yt = await getYouTubeClient(userId);
-  const res = await yt.videos.getRating({ id: videoId });
-  const items = res.data.items || [];
-  return items.length > 0 && items[0].rating === 'like';
+  try {
+    const res = await yt.videos.getRating({ id: videoId });
+    const items = res.data.items || [];
+    return items.length > 0 && items[0].rating === 'like';
+  } catch (e) { rethrowAuthError(e); }
 }
 
 async function verifyComment(userId, videoId) {
