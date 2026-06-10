@@ -21,10 +21,10 @@ const googleSignIn = async (req, res, next) => {
     // This is the proper fix — refresh token never expires
     if (serverAuthCode) {
       try {
+        // No redirect URI — correct for native mobile apps (OOB was deprecated 2022)
         const oauth2 = new OAuth2Client(
           process.env.GOOGLE_CLIENT_ID,
-          process.env.GOOGLE_CLIENT_SECRET,
-          'urn:ietf:wg:oauth:2.0:oob' // Required for React Native mobile
+          process.env.GOOGLE_CLIENT_SECRET
         );
         const { tokens } = await oauth2.getToken(serverAuthCode);
         if (tokens.access_token)  ytAccessToken  = tokens.access_token;
