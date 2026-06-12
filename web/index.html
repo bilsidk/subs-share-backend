@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SubsShare — Grow your YouTube channel</title>
+<meta name="description" content="Earn coins by subscribing, liking and watching — spend them to grow your own YouTube channel.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>📺</text></svg>">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root{
+  --bg:#0A0A0F; --card:#13131A; --elevated:#1C1C26; --input:#1A1A24;
+  --primary:#6C63FF; --primary-dark:#4E47CC; --glow:rgba(108,99,255,.2);
+  --gold:#FFD166; --success:#06D6A0; --danger:#EF476F; --warning:#FFB703;
+  --text:#FFFFFF; --text2:#9999BB; --muted:#555570; --border:#2A2A3A;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px}
+#app{max-width:520px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;padding-bottom:70px}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;font-size:inherit}
+input,select{font-family:inherit;font-size:15px;color:var(--text);background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px 14px;width:100%;outline:none}
+input:focus,select:focus{border-color:var(--primary)}
+a{color:var(--primary)}
+
+.screen{padding:16px;flex:1}
+.header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border)}
+.header h1{font-size:17px;font-weight:700}
+.coins{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:999px;padding:6px 14px;font-weight:700;color:var(--gold)}
+
+.tabbar{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--border);max-width:520px;margin:0 auto;z-index:10}
+.tabbar button{flex:1;padding:10px 0 12px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:11px;font-weight:600}
+.tabbar button.active{color:var(--primary)}
+.tabbar .ico{font-size:21px}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:10px}
+.btn{display:block;width:100%;background:var(--primary);color:#fff;font-weight:600;font-size:15px;padding:13px;border-radius:12px;text-align:center;transition:opacity .15s}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.secondary{background:transparent;border:1px solid var(--primary);color:var(--primary)}
+.btn.danger-outline{background:transparent;border:1px solid var(--danger);color:var(--danger)}
+.btn.small{width:auto;padding:9px 16px;font-size:13px;display:inline-block}
+
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.chip{padding:8px 16px;border-radius:999px;border:1px solid var(--border);background:var(--card);color:var(--text2);font-size:13px;font-weight:500}
+.chip.active{border-color:var(--primary);background:var(--glow);color:var(--primary)}
+
+.task{display:flex;align-items:center;gap:12px}
+.task .avatar{width:44px;height:44px;border-radius:50%;background:var(--elevated);display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden;flex-shrink:0}
+.task .avatar img{width:100%;height:100%;object-fit:cover}
+.task .info{flex:1;min-width:0}
+.task .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .meta{color:var(--text2);font-size:12.5px;margin-top:2px}
+.task .reward{color:var(--gold);font-weight:700;white-space:nowrap}
+
+.label{color:var(--text2);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin:18px 0 8px}
+.hint{color:var(--text2);font-size:12.5px;margin-top:6px;line-height:1.45}
+.error{color:var(--danger);font-size:13.5px;margin-top:10px;text-align:center;line-height:1.4}
+.success-text{color:var(--success);font-size:13.5px;margin-top:10px;text-align:center}
+.empty{color:var(--text2);text-align:center;padding:50px 20px;line-height:1.5}
+.center{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;text-align:center;padding:32px}
+
+.badge{font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:6px;background:var(--primary);color:#fff;text-transform:uppercase}
+.badge.completed{background:var(--success)} .badge.paused{background:var(--warning);color:#222} .badge.cancelled{background:var(--danger)}
+
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:flex-end;justify-content:center;z-index:50}
+.modal{background:var(--elevated);border-radius:18px 18px 0 0;padding:20px;width:100%;max-width:520px;max-height:88vh;overflow-y:auto}
+.modal h2{font-size:17px;margin-bottom:6px}
+.countdown{font-size:34px;font-weight:800;color:var(--primary);text-align:center;margin:10px 0}
+.steps{color:var(--text2);font-size:14px;line-height:1.7;margin:10px 0}
+
+.row{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)}
+.row:last-child{border-bottom:none}
+.row .l{color:var(--text2);font-size:14px}
+.row .v{font-weight:600;font-size:14px}
+
+.tx{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+.tx:last-child{border-bottom:none}
+.tx .d{font-size:13.5px;line-height:1.4}
+.tx .t{color:var(--muted);font-size:11.5px;margin-top:2px}
+.tx .amt{font-weight:700;white-space:nowrap;margin-left:10px}
+.tx .amt.plus{color:var(--success)} .tx .amt.minus{color:var(--danger)}
+
+.profile-head{display:flex;flex-direction:column;align-items:center;padding:26px 0 14px}
+.profile-head img{width:78px;height:78px;border-radius:50%;border:2px solid var(--primary)}
+.profile-head .ph{width:78px;height:78px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700}
+.profile-head h2{margin-top:10px;font-size:18px}
+.profile-head .email{color:var(--text2);font-size:13px;margin-top:2px}
+
+.gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#1f1f1f;font-weight:600;border-radius:12px;padding:13px;width:100%;font-size:15px}
+.spinner{width:22px;height:22px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+.logo{font-size:56px;margin-bottom:14px}
+.pricebox{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-top:10px;font-size:13.5px;color:var(--text2)}
+.pricebox b{color:var(--gold)}
+</style>
+</head>
+<body>
+<div id="app"><div class="center"><div class="spinner"></div></div></div>
+<script src="app.js"></script>
+</body>
+</html>

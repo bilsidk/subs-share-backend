@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -13,9 +14,17 @@ const { initOnBoot }    = require('./services/settingsService');
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(helmet());
+// CSP off: the web app inlines its scripts and loads Google Identity Services.
+// COOP must allow popups or the GIS sign-in popup can't message back.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+}));
 app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : false }));
 app.use(express.json({ limit: '10kb' }));
+
+// Web app (same-origin static SPA — see /web)
+app.use(express.static(path.join(__dirname, '..', 'web')));
 
 // ── Rate limiters ────────────────────────────────────────────
 

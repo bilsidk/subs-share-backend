@@ -6,30 +6,33 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const googleSignIn = async (req, res, next) => {
   try {
-    const { idToken, serverAuthCode, accessToken } = req.body;
-   
-    if (!idToken) return res.status(400).json({ error: 'idToken required' });
+    const { idToken, serverAuthCode, accessToken, web } = req.body;
 
-    const ticket = await client.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
-    const { sub: google_id, email, name, picture: avatar } = ticket.getPayload();
+    if (!idToken && !serverAuthCode)
+      return res.status(400).json({ error: 'idToken required' });
 
     let ytAccessToken = accessToken || null;
     let ytRefreshToken = null;
     let ytExpiry = null;
+    let idTokenToVerify = idToken || null;
 
     // Exchange serverAuthCode for long-lived refresh token
     // This is the proper fix — refresh token never expires
     if (serverAuthCode) {
       try {
-        // No redirect URI — correct for native mobile apps (OOB was deprecated 2022)
+        // Native mobile: no redirect URI (OOB was deprecated 2022).
+        // Web popup (GIS code client): redirect URI must be 'postmessage'.
         const oauth2 = new OAuth2Client(
           process.env.GOOGLE_CLIENT_ID,
-          process.env.GOOGLE_CLIENT_SECRET
+          process.env.GOOGLE_CLIENT_SECRET,
+          web ? 'postmessage' : undefined
         );
         const { tokens } = await oauth2.getToken(serverAuthCode);
         if (tokens.access_token)  ytAccessToken  = tokens.access_token;
         if (tokens.refresh_token) ytRefreshToken = tokens.refresh_token;
         if (tokens.expiry_date)   ytExpiry       = new Date(tokens.expiry_date);
+        // Web flow sends only the code; the exchange returns the id_token
+        if (!idTokenToVerify && tokens.id_token) idTokenToVerify = tokens.id_token;
         console.log('[Auth] Token exchange success. Has refresh token:', !!ytRefreshToken);
       } catch (e) {
         // Exchange failed — fall back to accessToken from mobile
@@ -44,6 +47,11 @@ const googleSignIn = async (req, res, next) => {
       ytAccessToken = accessToken;
       ytExpiry = new Date(Date.now() + 3600 * 1000);
     }
+
+    if (!idTokenToVerify) return res.status(400).json({ error: 'idToken required' });
+
+    const ticket = await client.verifyIdToken({ idToken: idTokenToVerify, audience: process.env.GOOGLE_CLIENT_ID });
+    const { sub: google_id, email, name, picture: avatar } = ticket.getPayload();
 
     const result = await pool.query(
       `INSERT INTO users (google_id, email, name, avatar, youtube_access_token, youtube_refresh_token, youtube_token_expiry)

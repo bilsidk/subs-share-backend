@@ -18,12 +18,10 @@ function tierFor(role) {
   return cfg.TIER.USER;
 }
 
-function watchPricing(minutes) {
+function watchPricing(minutes, baseReward, margin) {
   const extraMins = Math.max(0, minutes - 1);
-  return {
-    reward:   cfg.REWARDS.watch   + (extraMins * cfg.WATCH_REWARD_PER_EXTRA_MIN),
-    slotCost: cfg.SLOT_COSTS.watch + (extraMins * cfg.WATCH_COST_PER_EXTRA_MIN),
-  };
+  const reward = baseReward + (extraMins * cfg.WATCH_REWARD_PER_EXTRA_MIN);
+  return { reward, slotCost: reward + margin };
 }
 
 // GET /tasks
@@ -71,10 +69,20 @@ const createTask = async (req, res, next) => {
     if (!cfg.REWARDS[task_type])
       return res.status(400).json({ error: 'Invalid task_type' });
 
+    const appSettings = await settings.getSettings();
+    const margin = appSettings.house_margin ?? 3;
+    const rewardMap = {
+      subscribe:       appSettings.coins_subscribe,
+      like:            appSettings.coins_like,
+      like_comment:    appSettings.coins_like_comment,
+      subscribe_like:  appSettings.coins_subscribe_like,
+      watch:           appSettings.coins_watch,
+    };
+
     let target_video_id = null;
     let video_duration_sec = null;
-    let taskReward = cfg.REWARDS[task_type];
-    let slotCost = cfg.SLOT_COSTS[task_type];
+    let taskReward = rewardMap[task_type] ?? cfg.REWARDS[task_type];
+    let slotCost = taskReward + margin;
 
     if (task_type !== 'subscribe') {
       if (!target_video_url)
@@ -98,7 +106,7 @@ const createTask = async (req, res, next) => {
             video_duration_sec: videoInfo.durationSec,
           });
         video_duration_sec = videoInfo.durationSec;
-        const pricing = watchPricing(mins);
+        const pricing = watchPricing(mins, rewardMap.watch ?? cfg.REWARDS.watch, margin);
         taskReward = pricing.reward;
         slotCost = pricing.slotCost;
       }
@@ -120,7 +128,6 @@ const createTask = async (req, res, next) => {
     }
 
     if (!isOwner) {
-      const appSettings = await settings.getSettings();
       const activeCount = await client.query(
         `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
          WHERE c.user_id=$1 AND t.status IN ('active','paused')`,
@@ -230,7 +237,11 @@ const verifyTask = async (req, res, next) => {
         if (task.task_type === 'like_comment') {
           try {
             const cr = await youtubeService.verifyComment(req.userId, task.target_video_id);
-            if (cr.found) { commentVerified = true; bonusCoins = cfg.COMMENT_BONUS; }
+            if (cr.found) {
+              commentVerified = true;
+              const s = await settings.getSettings();
+              bonusCoins = s.comment_bonus ?? cfg.COMMENT_BONUS;
+            }
           } catch (e) { console.error('Comment check error (non-fatal):', e.message); }
         }
         await settings.recordApiSuccess();

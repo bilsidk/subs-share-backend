@@ -50,7 +50,7 @@ const updateAppSettings = async (req, res, next) => {
       'daily_limit_user', 'daily_limit_premium',
       'coins_subscribe', 'coins_like', 'coins_like_comment',
       'coins_subscribe_like', 'coins_watch', 'comment_bonus',
-      'coins_per_slot', 'completion_delay_seconds', 'max_campaigns_per_user',
+      'house_margin', 'completion_delay_seconds', 'max_campaigns_per_user',
     ];
     const updates = {};
     for (const key of allowed) {
