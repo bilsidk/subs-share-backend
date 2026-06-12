@@ -2,6 +2,9 @@
 'use strict';
 
 const GOOGLE_CLIENT_ID = '59298470844-ldipur31o2rbe3la0oecsin3jd65pklq.apps.googleusercontent.com';
+// Same-origin when served by the backend itself; absolute URL when hosted elsewhere (e.g. Namecheap)
+const API_BASE = location.hostname.endsWith('.railway.app') || location.hostname === 'localhost'
+  ? '' : 'https://subs-share-backend-production.up.railway.app';
 const YT_SCOPE = 'openid email profile https://www.googleapis.com/auth/youtube.readonly';
 const COMPLETION_DELAY = 45; // server enforces the real value; this drives the UI countdown
 
@@ -37,7 +40,7 @@ function deviceId() {
 async function req(method, path, body) {
   const headers = { 'Content-Type': 'application/json' };
   if (S.token) headers.Authorization = 'Bearer ' + S.token;
-  const res = await fetch(path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  const res = await fetch(API_BASE + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   const text = await res.text();
   let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || 'Unexpected response' }; }
   if (res.status === 401 && S.token) { signOut(); throw new Error('Session expired — sign in again.'); }
