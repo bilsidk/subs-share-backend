@@ -1,4 +1,6 @@
 const pool = require('../db/pool');
+const { google } = require('googleapis');
+const { Resend } = require('resend');
 
 let _modeCache = { mode: 'live', reason: null, at: 0 };
 let _settingsCache = { data: null, at: 0 };
@@ -8,20 +10,117 @@ let _failWindow = [];
 const FAIL_WINDOW_MS = 5 * 60 * 1000;
 const FAIL_THRESHOLD = 25;
 
+const RECOVERY_INTERVAL_MS = 30 * 60 * 1000;
+let _recoveryTimer = null;
+
 // Default settings fallback
 const DEFAULTS = {
   daily_limit_user: 100,
   daily_limit_premium: 200,
-  coins_subscribe: 10,
-  coins_like: 8,
+  coins_subscribe: 12,
+  coins_like: 6,
   coins_like_comment: 10,
-  coins_subscribe_like: 16,
-  coins_watch: 5,
+  coins_subscribe_like: 17,
+  coins_watch: 4,
   comment_bonus: 4,
-  coins_per_slot: 10,
+  house_margin: 3,
   completion_delay_seconds: 45,
   max_campaigns_per_user: 5,
 };
+
+// ─── Email ────────────────────────────────────────────────────────────────────
+
+async function _sendAlert(subject, text) {
+  const to = process.env.ALERT_EMAIL;
+  if (!to) { console.warn('[ALERT] ALERT_EMAIL not set — skipping email'); return; }
+  if (!process.env.RESEND_API_KEY) { console.warn('[ALERT] RESEND_API_KEY not set — skipping email'); return; }
+  try {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    await resend.emails.send({
+      from: 'SubsShare <onboarding@resend.dev>',
+      to,
+      subject,
+      text,
+    });
+    console.log(`[ALERT] Email sent: ${subject}`);
+  } catch (err) {
+    console.error('[ALERT] Email failed', err.message);
+  }
+}
+
+// ─── YouTube API probe ────────────────────────────────────────────────────────
+
+async function probeYouTubeApi() {
+  try {
+    // Grab any valid token from DB
+    const res = await pool.query(
+      `SELECT youtube_access_token, youtube_refresh_token, youtube_token_expiry
+       FROM users
+       WHERE youtube_access_token IS NOT NULL AND youtube_token_expiry > NOW()
+       ORDER BY last_task_at DESC NULLS LAST LIMIT 1`
+    );
+    if (!res.rows.length) {
+      // No tokens — just ping the YouTube API endpoint
+      const youtube = google.youtube({ version: 'v3', auth: process.env.GOOGLE_API_KEY });
+      await youtube.videos.list({ part: ['id'], id: ['dQw4w9WgXcQ'], maxResults: 1 });
+      return true;
+    }
+    const row = res.rows[0];
+    const oauth2 = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
+    oauth2.setCredentials({
+      access_token: row.youtube_access_token,
+      refresh_token: row.youtube_refresh_token,
+      expiry_date: row.youtube_token_expiry ? new Date(row.youtube_token_expiry).getTime() : null,
+    });
+    const youtube = google.youtube({ version: 'v3', auth: oauth2 });
+    await youtube.channels.list({ part: ['id'], mine: true, maxResults: 1 });
+    return true;
+  } catch (err) {
+    const status = err.code || err.response?.status;
+    // 401/403 means API is reachable but auth issue — YouTube itself is UP
+    if (status === 401 || status === 403 || status === '401' || status === '403') return true;
+    console.warn('[PROBE] YouTube API probe failed:', err.message);
+    return false;
+  }
+}
+
+// ─── Recovery timer ───────────────────────────────────────────────────────────
+
+function _stopRecoveryTimer() {
+  if (_recoveryTimer) {
+    clearInterval(_recoveryTimer);
+    _recoveryTimer = null;
+  }
+}
+
+function _startRecoveryTimer() {
+  if (_recoveryTimer) return;
+  console.log('[RECOVERY] Starting 30-min recovery check timer');
+  _recoveryTimer = setInterval(async () => {
+    try {
+      const current = await getMode();
+      if (current.mode !== 'degraded') { _stopRecoveryTimer(); return; }
+
+      console.log('[RECOVERY] Probing YouTube API...');
+      const ok = await probeYouTubeApi();
+      if (ok) {
+        await setMode('live', null);
+        _stopRecoveryTimer();
+        _failWindow = [];
+        await _sendAlert(
+          '✅ SubsShare — API recovered (auto)',
+          `YouTube API is responding again.\nMode switched back to LIVE automatically at ${new Date().toISOString()}.`
+        );
+      } else {
+        console.log('[RECOVERY] YouTube API still down — staying degraded');
+      }
+    } catch (err) {
+      console.error('[RECOVERY] Timer error:', err.message);
+    }
+  }, RECOVERY_INTERVAL_MS);
+}
+
+// ─── Core ─────────────────────────────────────────────────────────────────────
 
 async function getMode() {
   const now = Date.now();
@@ -51,12 +150,9 @@ async function getSettings() {
 
 async function updateSettings(updates) {
   await pool.query(
-    `UPDATE app_settings
-     SET settings = settings || $1::jsonb, updated_at = NOW()
-     WHERE id = 1`,
+    `UPDATE app_settings SET settings = settings || $1::jsonb, updated_at = NOW() WHERE id = 1`,
     [JSON.stringify(updates)]
   );
-  // Bust cache
   _settingsCache = { data: null, at: 0 };
 }
 
@@ -76,17 +172,43 @@ async function recordApiFailure(kind) {
   if (_failWindow.length >= FAIL_THRESHOLD) {
     const current = await getMode();
     if (current.mode !== 'degraded') {
-      await setMode('degraded', `Auto: ${_failWindow.length} API failures in 5m (last: ${kind})`);
+      // Confirm it's a real outage — probe from the server side
+      const apiDown = !(await probeYouTubeApi());
+      const reason = apiDown
+        ? `Auto: ${_failWindow.length} API failures in 5m + server probe failed (last: ${kind})`
+        : `Auto: ${_failWindow.length} API failures in 5m — server probe OK (user-side issue?) (last: ${kind})`;
+
+      await setMode('degraded', reason);
+      _startRecoveryTimer();
+
+      await _sendAlert(
+        '🚨 SubsShare — API degraded, switching to honor mode',
+        `Switched to HONOR (degraded) mode.\n\nReason: ${reason}\nTime: ${new Date().toISOString()}\n\nThe app will auto-probe YouTube API every 30 minutes and recover automatically when it comes back.`
+      );
     }
   }
 }
 
 async function recordApiSuccess() {
   _failWindow = [];
-  const current = await getMode();
-  if (current.mode === 'degraded' && current.reason?.startsWith('Auto:')) {
-    await setMode('live', null);
+}
+
+// Called once on app boot — resumes recovery timer if server restarted while degraded
+async function initOnBoot() {
+  try {
+    const current = await getMode();
+    if (current.mode === 'degraded') {
+      console.log('[BOOT] App started in degraded mode — starting recovery timer');
+      _startRecoveryTimer();
+    }
+  } catch (err) {
+    console.error('[BOOT] initOnBoot error:', err.message);
   }
 }
 
-module.exports = { getMode, getSettings, updateSettings, setMode, recordApiFailure, recordApiSuccess, DEFAULTS };
+module.exports = {
+  getMode, getSettings, updateSettings, setMode,
+  recordApiFailure, recordApiSuccess,
+  probeYouTubeApi, initOnBoot,
+  DEFAULTS,
+};

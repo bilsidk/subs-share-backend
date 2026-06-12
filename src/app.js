@@ -9,6 +9,7 @@ const taskRoutes        = require('./routes/tasks');
 const transactionRoutes = require('./routes/transactions');
 const adminRoutes       = require('./routes/admin');
 const { errorHandler }  = require('./middleware/errorHandler');
+const { initOnBoot }    = require('./services/settingsService');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -82,5 +83,7 @@ app.use('/admin',        adminLimiter,   adminRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 app.use(errorHandler);
+
+initOnBoot();
 
 module.exports = app;
