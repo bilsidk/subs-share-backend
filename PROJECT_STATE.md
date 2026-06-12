@@ -81,6 +81,10 @@ Rate limits: global 200/15m · auth 10/15m · verify 30/15m · campaigns 20/hr �
 - Backend changes: `web:true` flag → OAuth2Client redirect `postmessage`; id_token taken from
   code exchange; helmet CSP off + COOP `same-origin-allow-popups`; express.static serves /web
 - Same-origin API calls → no CORS/ALLOWED_ORIGINS change needed
+- Host-agnostic (commit `6d031a9`): app.js auto-detects — same-origin on *.railway.app/localhost,
+  absolute Railway API URL on any other host. Upload bundle for external hosting:
+  `D:\react\subs\subsshare-web.zip` (index.html + app.js). External host needs that origin
+  added to BOTH Railway `ALLOWED_ORIGINS` and Google OAuth Authorized JavaScript origins.
 - Purpose: covers users on Android < 7 (mobile app floor is minSdk 24) and desktop
 
 ### Mobile (Play Store)
