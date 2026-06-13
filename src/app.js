@@ -20,7 +20,15 @@ app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
 }));
-app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : false }));
+// ALLOWED_ORIGINS: unset -> same-origin only; "*" -> reflect any origin (the cors
+// package treats ["*"] as a literal match, NOT a wildcard, so handle it explicitly);
+// otherwise a comma-separated allowlist (trimmed).
+const _allowedOrigins = process.env.ALLOWED_ORIGINS?.trim();
+app.use(cors({
+  origin: !_allowedOrigins ? false
+        : _allowedOrigins === '*' ? true
+        : _allowedOrigins.split(',').map(o => o.trim()),
+}));
 app.use(express.json({ limit: '10kb' }));
 
 // Web app (same-origin static SPA — see /web)
