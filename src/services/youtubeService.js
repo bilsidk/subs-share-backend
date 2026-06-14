@@ -141,8 +141,40 @@ function parseVideoId(url) {
   return null;
 }
 
+// Resolve any channel URL / @handle / UC id to {id, name, subs}. Uses the public
+// API key so a user can add a channel that isn't their own. Returns null if not found.
+async function resolveChannel(input) {
+  const raw = (input || '').trim();
+  if (!raw) return null;
+  const yt = google.youtube({ version: 'v3', auth: process.env.YOUTUBE_API_KEY });
+  const pick = (ch) => ch ? {
+    id: ch.id,
+    name: ch.snippet?.title || 'Channel',
+    subs: ch.statistics?.subscriberCount ? parseInt(ch.statistics.subscriberCount, 10) : 0,
+  } : null;
+  try {
+    const idm = raw.match(/channel\/(UC[\w-]{20,})/) || raw.match(/^(UC[\w-]{20,})$/);
+    if (idm) return pick((await yt.channels.list({ part: 'id,snippet,statistics', id: idm[1] })).data.items?.[0]);
+
+    const hm = raw.match(/@([\w.\-]+)/);
+    if (hm) {
+      const ch = pick((await yt.channels.list({ part: 'id,snippet,statistics', forHandle: '@' + hm[1] })).data.items?.[0]);
+      if (ch) return ch;
+    }
+    const um = raw.match(/\/user\/([\w\-]+)/);
+    if (um) {
+      const ch = pick((await yt.channels.list({ part: 'id,snippet,statistics', forUsername: um[1] })).data.items?.[0]);
+      if (ch) return ch;
+    }
+    return null;
+  } catch (e) {
+    console.error('[YouTube] resolveChannel failed:', e.message);
+    return null;
+  }
+}
+
 module.exports = {
   verifySubscription, verifyLike, verifyComment,
   getVideoDuration, fetchOwnChannelId, getSubscriberCount,
-  parseVideoId,
+  parseVideoId, resolveChannel,
 };

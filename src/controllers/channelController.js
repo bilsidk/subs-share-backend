@@ -1,5 +1,5 @@
 const pool = require('../db/pool');
-const { getSubscriberCount } = require('../services/youtubeService');
+const { getSubscriberCount, resolveChannel } = require('../services/youtubeService');
 
 // Validate that a string looks like a YouTube channel URL or handle
 function isValidChannelUrl(url) {
@@ -15,34 +15,32 @@ function sanitizeText(str, maxLen = 100) {
   return str.trim().slice(0, maxLen).replace(/[<>]/g, '');
 }
 
+// Add any YouTube channel (not necessarily the user's own). The client just
+// pastes a channel URL or @handle; we resolve it to a real channel id/name.
 const addChannel = async (req, res, next) => {
   try {
-    const { youtube_channel_id, channel_name, channel_url } = req.body;
-
-    if (!youtube_channel_id || !channel_name || !channel_url) {
-      return res.status(400).json({ error: 'youtube_channel_id, channel_name, and channel_url are required' });
+    const { channel_url } = req.body;
+    if (!channel_url || !isValidChannelUrl(channel_url)) {
+      return res.status(400).json({ error: 'Paste a valid YouTube channel URL or @handle (e.g. youtube.com/@yourhandle).' });
     }
 
-    // Validate channel URL format
-    if (!isValidChannelUrl(channel_url)) {
-      return res.status(400).json({ error: 'Invalid YouTube channel URL. Use format: youtube.com/@yourhandle' });
+    const ch = await resolveChannel(channel_url);
+    if (!ch || !ch.id) {
+      return res.status(400).json({ error: "Couldn't find that channel on YouTube. Double-check the URL or @handle." });
     }
 
-    // Sanitize channel name
-    const safeName = sanitizeText(channel_name, 100);
-    if (safeName.length < 1) {
-      return res.status(400).json({ error: 'Channel name is required' });
-    }
+    // No duplicates per user
+    const dup = await pool.query(
+      'SELECT id FROM channels WHERE user_id=$1 AND youtube_channel_id=$2',
+      [req.userId, ch.id]
+    );
+    if (dup.rows.length) return res.status(409).json({ error: 'You already added that channel.' });
 
-    // Sanitize channel ID
-    const safeChannelId = sanitizeText(youtube_channel_id, 50);
     const safeUrl = channel_url.trim().slice(0, 200);
-
-    const subscriberCount = await getSubscriberCount(safeChannelId);
     const result = await pool.query(
       `INSERT INTO channels (user_id, youtube_channel_id, channel_name, channel_url, subscriber_count)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [req.userId, safeChannelId, safeName, safeUrl, subscriberCount]
+      [req.userId, ch.id, sanitizeText(ch.name, 100) || 'Channel', safeUrl, ch.subs || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
