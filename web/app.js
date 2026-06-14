@@ -54,6 +54,7 @@ const api = {
   me: () => req('GET', '/users/me').then(d => (d && d.user) ? d.user : d),
   deleteAccount: () => req('DELETE', '/users/me'),
   channels: () => req('GET', '/channels'),
+  addChannel: (channel_url) => req('POST', '/channels', { channel_url }),
   tasks: (type) => req('GET', '/tasks' + (type ? '?type=' + encodeURIComponent(type) : '')),
   myTasks: () => req('GET', '/tasks/my'),
   createTask: (d) => req('POST', '/tasks', d),
@@ -62,7 +63,24 @@ const api = {
   resume: (id) => req('PATCH', `/tasks/${id}/resume`),
   cancel: (id) => req('DELETE', `/tasks/${id}`),
   txs: (page = 1) => req('GET', '/transactions?page=' + page),
+  adminStatus: () => req('GET', '/admin/status'),
+  adminSaveSettings: (d) => req('PATCH', '/admin/settings', d),
+  adminMode: (mode) => req('POST', '/admin/mode', { mode }),
+  adminUsers: (params) => { const qs = new URLSearchParams(params || {}).toString(); return req('GET', '/admin/users' + (qs ? '?' + qs : '')); },
+  adminBan: (email, unban) => req('POST', '/admin/ban', { email, unban }),
+  adminPromote: (email, role) => req('POST', '/admin/promote', { email, role }),
 };
+
+// Admin panel draft state
+const A = { stats: {}, mode: 'live', settings: {}, userQuery: '', users: [], saving: false, msg: '', err: '', userErr: '' };
+const ADMIN_FIELDS = [
+  ['coins_subscribe', 'Subscribe reward'], ['coins_like', 'Like reward'],
+  ['coins_like_comment', 'Like+Comment reward'], ['coins_subscribe_like', 'Sub+Like reward'],
+  ['coins_watch', 'Watch reward'], ['comment_bonus', 'Comment bonus'],
+  ['house_margin', 'House margin'], ['completion_delay_seconds', 'Verify delay (s)'],
+  ['daily_limit_user', 'Daily limit (user)'], ['daily_limit_premium', 'Daily limit (premium)'],
+  ['max_campaigns_per_user', 'Max campaigns/user'],
+];
 
 // ── auth ──────────────────────────────────────────────────────────────────────
 function signIn() {
@@ -80,7 +98,7 @@ function signIn() {
         S.token = data.token; localStorage.setItem('token', data.token);
         S.user = data.user;
         S.busy = false;
-        await loadTab('earn');
+        await loadTab('home');
       } catch (e) {
         S.busy = false; S.loginError = e.message; render();
       }
@@ -99,10 +117,20 @@ function signOut() {
 // ── helpers ───────────────────────────────────────────────────────────────────
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+// Returns a real YouTube URL or null. Never a relative/garbage value, so bad
+// campaign data can't send the user to a 404 on our own domain.
 function taskUrl(t) {
-  if (t.target_video_id) return 'https://www.youtube.com/watch?v=' + encodeURIComponent(t.target_video_id);
-  if (t.channel_url) return t.channel_url;
-  if (t.youtube_channel_id) return 'https://www.youtube.com/channel/' + encodeURIComponent(t.youtube_channel_id);
+  if (t.target_video_id && /^[\w-]{11}$/.test(t.target_video_id))
+    return 'https://www.youtube.com/watch?v=' + t.target_video_id;
+  const u = (t.channel_url || '').trim();
+  if (u) {
+    if (/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(u)) return u;
+    if (/^@[\w.-]+$/.test(u)) return 'https://www.youtube.com/' + u;
+    if (/^UC[\w-]{20,}$/.test(u)) return 'https://www.youtube.com/channel/' + u;
+    if (/^(www\.)?(youtube\.com|youtu\.be)\//i.test(u)) return 'https://' + u.replace(/^\/+/, '');
+  }
+  if (t.youtube_channel_id && /^UC[\w-]{10,}$/.test(t.youtube_channel_id))
+    return 'https://www.youtube.com/channel/' + t.youtube_channel_id;
   return null;
 }
 
@@ -128,6 +156,16 @@ function estimateCost(type, slots, watchMins) {
   return perSlot * (slots || 0);
 }
 
+// Price-box HTML: total = per-slot × slots, recomputed live as the user types.
+function priceHTML() {
+  const slots = parseInt(C.slots, 10) || 0;
+  const mins = parseInt(C.watchMins, 10) || 1;
+  const per = estimateCost(C.type, 1, mins);
+  const total = per * slots;
+  return tr('grow.price', { cost: `<b>${total}</b>`, per });
+}
+function updatePrice() { const el = document.getElementById('pricebox'); if (el) el.innerHTML = priceHTML(); }
+
 // ── data loading ──────────────────────────────────────────────────────────────
 async function loadTab(tab) {
   S.tab = tab; render();
@@ -135,6 +173,8 @@ async function loadTab(tab) {
     if (tab === 'earn') S.tasks = await api.tasks(S.taskFilter);
     else if (tab === 'grow') { [S.myTasks, S.channels] = await Promise.all([api.myTasks(), api.channels()]); }
     else if (tab === 'wallet') S.txs = (await api.txs(1)).transactions || [];
+    else if (tab === 'home') { [S.myTasks, S.txs] = await Promise.all([api.myTasks(), api.txs(1).then(r => r.transactions || [])]); }
+    else if (tab === 'admin') { const st = await api.adminStatus(); A.stats = st.stats; A.mode = st.api_mode; A.settings = { ...st.settings }; }
     else if (tab === 'profile') S.user = (await api.me()) || S.user;
     if (tab !== 'profile' && S.token) { api.me().then(d => { S.user = d; render(); }).catch(() => {}); }
   } catch (e) { console.warn('load error', e.message); }
@@ -151,7 +191,8 @@ function closeModal() { S.modal = null; if (countdownTimer) clearInterval(countd
 function modalOpenYouTube() {
   const m = S.modal; if (!m) return;
   const url = taskUrl(m.task);
-  if (url) window.open(url, '_blank', 'noopener');
+  if (!url) { m.error = 'This campaign has an invalid link — try another task.'; render(); return; }
+  window.open(url, '_blank', 'noopener');
   if (m.status === 'idle') {
     m.startedAt = Date.now();
     m.status = 'countdown'; m.countdown = COMPLETION_DELAY;
@@ -182,7 +223,22 @@ async function modalVerify() {
 }
 
 // ── create campaign ───────────────────────────────────────────────────────────
-const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', creating: false, error: '', ok: '' };
+const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', creating: false, error: '', ok: '', channelId: null, newChannelUrl: '', addingChannel: false };
+
+async function addChannelWeb() {
+  const url = (C.newChannelUrl || '').trim();
+  C.error = ''; C.ok = '';
+  if (!url) { C.error = 'Paste a channel URL or @handle.'; return render(); }
+  C.addingChannel = true; render();
+  try {
+    const ch = await api.addChannel(url);
+    S.channels = await api.channels();
+    C.channelId = ch.id;            // auto-select the channel just added
+    C.newChannelUrl = '';
+    C.ok = `${tr('grow.channelAdded')} ${ch.channel_name}`;
+  } catch (e) { C.error = e.message; }
+  C.addingChannel = false; render();
+}
 
 async function createCampaign() {
   C.error = ''; C.ok = '';
@@ -191,7 +247,7 @@ async function createCampaign() {
   const needsVideo = C.type !== 'subscribe';
   if (needsVideo && !C.videoUrl.trim()) { C.error = tr('grow.errVideo'); return render(); }
   const needsChannel = ['subscribe', 'subscribe_like'].includes(C.type);
-  const channel = S.channels[0];
+  const channel = S.channels.find(c => String(c.id) === String(C.channelId)) || S.channels[0];
   if (needsChannel && !channel) { C.error = tr('grow.errChannel'); return render(); }
 
   C.creating = true; render();
@@ -227,11 +283,54 @@ async function deleteAccount() {
   try { await api.deleteAccount(); signOut(); } catch (e) { alert(e.message); }
 }
 
+// ── admin ───────────────────────────────────────────────────────────────────
+function gotoAdmin() { loadTab('admin'); }
+
+async function adminSave() {
+  A.msg = ''; A.err = ''; A.saving = true; render();
+  try {
+    const payload = {};
+    ADMIN_FIELDS.forEach(([k]) => { if (A.settings[k] !== '' && A.settings[k] != null) payload[k] = parseInt(A.settings[k], 10); });
+    const res = await api.adminSaveSettings(payload);
+    A.settings = { ...res.settings };
+    A.msg = 'Settings saved.';
+  } catch (e) { A.err = e.message; }
+  A.saving = false; render();
+}
+
+async function adminSetMode(mode) {
+  A.msg = ''; A.err = '';
+  try { await api.adminMode(mode); A.mode = mode; A.msg = `Mode set to ${mode}.`; }
+  catch (e) { A.err = e.message; }
+  render();
+}
+
+async function adminSearchUsers() {
+  A.userErr = '';
+  try { A.users = (await api.adminUsers({ email: A.userQuery.trim() })).users || []; }
+  catch (e) { A.userErr = e.message; }
+  render();
+}
+async function adminTopCreators() {
+  A.userErr = '';
+  try { A.users = (await api.adminUsers({ sort: 'subs' })).users || []; }
+  catch (e) { A.userErr = e.message; }
+  render();
+}
+
+async function adminBanUser(email, unban) {
+  if (!unban && !confirm(`Ban ${email}?`)) return;
+  try { await api.adminBan(email, unban); await adminSearchUsers(); } catch (e) { alert(e.message); }
+}
+async function adminPromoteUser(email, role) {
+  try { await api.adminPromote(email, role); await adminSearchUsers(); } catch (e) { alert(e.message); }
+}
+
 // ── views ─────────────────────────────────────────────────────────────────────
 function vLogin() {
   return `
   <div class="center">
-    <div class="logo">📺</div>
+    <img class="logo" src="logo.png" alt="SubsShare" width="76" height="76" style="border-radius:18px">
     <h1 style="font-size:28px">SubsShare</h1>
     <p style="color:var(--text2);margin:10px 0 30px;line-height:1.5">${tr('login.tagline')}</p>
     <button class="gbtn" onclick="signIn()" ${S.busy ? 'disabled' : ''}>
@@ -296,7 +395,7 @@ function vModal() {
 
 function vGrow() {
   const needsVideo = C.type !== 'subscribe';
-  const est = estimateCost(C.type, parseInt(C.slots, 10) || 0, parseInt(C.watchMins, 10) || 1);
+  const needsChannel = ['subscribe', 'subscribe_like'].includes(C.type);
   const chips = TASK_TYPES.map(t =>
     `<button class="chip ${C.type === t ? 'active' : ''}" onclick="setCType('${t}')">${TASK_ICON[t]} ${taskLabel(t)}</button>`).join('');
   const myList = S.myTasks.length ? S.myTasks.map(t => `
@@ -316,13 +415,19 @@ function vGrow() {
   <div class="screen">
     <div class="label">${tr('grow.type')}</div>
     <div class="chips">${chips}</div>
+    ${needsChannel ? `<div class="label">${tr('grow.channelLabel')}</div>
+      ${S.channels.length ? `<select onchange="C.channelId=this.value;render()" style="width:100%">${S.channels.map(c => `<option value="${esc(String(c.id))}" ${String(C.channelId) === String(c.id) ? 'selected' : ''}>${esc(c.channel_name)}${c.subscriber_count != null ? ' · ' + c.subscriber_count + ' subs' : ''}</option>`).join('')}</select>` : `<p class="hint">${tr('grow.noChannelYet')}</p>`}
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input type="text" placeholder="youtube.com/@handle" value="${esc(C.newChannelUrl)}" oninput="C.newChannelUrl=this.value" style="flex:1">
+        <button class="btn small secondary" style="white-space:nowrap" onclick="addChannelWeb()" ${C.addingChannel ? 'disabled' : ''}>${C.addingChannel ? tr('grow.adding') : '+ ' + tr('grow.addChannel')}</button>
+      </div>` : ''}
     ${needsVideo ? `<div class="label">${tr('grow.videoUrl')}</div>
       <input id="c-video" type="url" placeholder="https://youtube.com/watch?v=…" value="${esc(C.videoUrl)}" oninput="C.videoUrl=this.value">` : ''}
     ${C.type === 'watch' ? `<div class="label">${tr('grow.minutes')}</div>
-      <input id="c-mins" type="number" min="1" max="60" value="${esc(C.watchMins)}" oninput="C.watchMins=this.value">` : ''}
+      <input id="c-mins" type="number" min="1" max="60" value="${esc(C.watchMins)}" oninput="C.watchMins=this.value;updatePrice()">` : ''}
     <div class="label">${C.type === 'subscribe' ? tr('grow.howManySubs') : tr('grow.howManyCompletions')}</div>
-    <input id="c-slots" type="number" min="1" placeholder="10" value="${esc(C.slots)}" oninput="C.slots=this.value" onchange="render()">
-    <div class="pricebox">${tr('grow.price', { cost: `<b>${est}</b>`, per: (est && C.slots ? Math.round(est / (parseInt(C.slots, 10) || 1)) : SLOT_COSTS[C.type]), reward: REWARDS[C.type], extra: (C.type === 'watch' ? tr('grow.extraMin') : '') })}</div>
+    <input id="c-slots" type="number" min="1" placeholder="10" value="${esc(C.slots)}" oninput="C.slots=this.value;updatePrice()">
+    <div class="pricebox" id="pricebox">${priceHTML()}</div>
     <button class="btn" style="margin-top:14px" onclick="createCampaign()" ${C.creating ? 'disabled' : ''}>${C.creating ? tr('grow.creating') : tr('grow.create')}</button>
     ${C.error ? `<p class="error">${esc(C.error)}</p>` : ''}${C.ok ? `<p class="success-text">${esc(C.ok)}</p>` : ''}
     <div class="label" style="margin-top:26px">${tr('grow.mine')}</div>
@@ -341,8 +446,10 @@ function vWallet() {
 
 function vProfile() {
   const u = S.user || {};
-  const langOpts = Object.entries(window.I18N.LANGS).map(([code, info]) =>
-    `<option value="${code}" ${code === window.I18N.getLang() ? 'selected' : ''}>${info.flag} ${esc(info.native)}</option>`).join('');
+  const L = window.I18N.LANGS, curLang = window.I18N.getLang();
+  const flagImg = (cc) => `<img src="https://flagcdn.com/24x18/${cc}.png" width="22" height="16" alt="">`;
+  const langMenu = Object.entries(L).map(([code, info]) =>
+    `<button onclick="changeLang('${code}')">${flagImg(info.cc)} ${esc(info.native)}</button>`).join('');
   return vHeader(tr('profile.title')) + `
   <div class="screen">
     <div class="profile-head">
@@ -357,20 +464,90 @@ function vProfile() {
     </div>
     <div class="card">
       <div class="row"><span class="l">${tr('profile.language')}</span>
-        <select onchange="changeLang(this.value)" style="width:auto;padding:8px 12px;font-weight:600">${langOpts}</select></div>
+        <details class="langpick"><summary>${flagImg(L[curLang].cc)} ${esc(L[curLang].native)} ▾</summary><div class="langmenu">${langMenu}</div></details></div>
     </div>
     <div class="card">
       <div class="row"><span class="l">${tr('profile.support')}</span><a class="v" href="mailto:support@viralboostnow.com">support@viralboostnow.com</a></div>
       <div class="row"><span class="l">${tr('common.privacy')}</span><a class="v" href="https://viralboostnow.com/privacy.html" target="_blank" rel="noopener">↗</a></div>
       <div class="row"><span class="l">${tr('common.terms')}</span><a class="v" href="https://viralboostnow.com/terms.html" target="_blank" rel="noopener">↗</a></div>
     </div>
+    ${u.is_admin ? `<button class="btn" style="margin-top:8px" onclick="loadTab('admin')">🛠 ${tr('profile.admin')}</button>` : ''}
     <button class="btn secondary" style="margin-top:8px" onclick="signOut()">${tr('profile.signOut')}</button>
     <button class="btn danger-outline" style="margin-top:26px" onclick="deleteAccount()">${tr('profile.deleteAccount')}</button>
   </div>`;
 }
 
+function vHome() {
+  const u = S.user || {};
+  const recent = (S.txs || []).slice(0, 5);
+  return vHeader(tr('tabs.home')) + `
+  <div class="screen">
+    <div class="card" style="text-align:center;padding:24px">
+      <div class="hint">${tr('home.balance')}</div>
+      <div style="font-size:40px;font-weight:800;color:var(--gold);margin:6px 0">🪙 ${u.coins ?? 0}</div>
+      <div class="hint">${tr('home.coinHint')}</div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${S.myTasks.length}</div><div class="hint">${tr('home.campaigns')}</div></div>
+      <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${u.tasks_completed ?? 0}</div><div class="hint">${tr('home.completed')}</div></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <button class="btn" style="flex:1" onclick="loadTab('earn')">${tr('home.earnCoins')}</button>
+      <button class="btn secondary" style="flex:1" onclick="loadTab('grow')">${tr('home.getSubs')}</button>
+    </div>
+    <div class="label" style="margin-top:22px">${tr('home.recentActivity')}</div>
+    <div class="card">${recent.length ? recent.map(tx => `
+      <div class="tx"><div><div class="d">${esc(txText(tx.description))}</div><div class="t">${new Date(tx.created_at).toLocaleDateString()}</div></div>
+      <div class="amt ${tx.type === 'spent' ? 'minus' : 'plus'}">${tx.type === 'spent' ? '−' : '+'}${tx.amount}</div></div>`).join('') : `<div class="empty">${tr('home.noTransactions')}</div>`}</div>
+  </div>`;
+}
+
+function vAdmin() {
+  const s = A.stats || {};
+  const tile = (label, val) => `<div class="card" style="flex:1;min-width:110px;text-align:center;margin-bottom:0"><div style="font-size:20px;font-weight:800">${val ?? 0}</div><div class="hint">${label}</div></div>`;
+  const fields = ADMIN_FIELDS.map(([k, label]) => `
+    <div class="row"><span class="l">${label}</span>
+      <input type="number" min="0" value="${esc(A.settings[k] ?? '')}" oninput="A.settings['${k}']=this.value" style="width:90px;padding:8px;text-align:right"></div>`).join('');
+  const users = A.users.map(u => `
+    <div class="card">
+      <div><b>${esc(u.name || u.email)}</b> <span style="color:var(--gold)">🔔 ${u.subscriber_count ?? 0} subs</span>
+        <div class="hint">${esc(u.email)} · ${esc(u.role)} · 🪙${u.coins} · ${u.tasks_completed} done${u.is_banned ? ' · ⛔ banned' : ''}${u.youtube_channel_id ? ` · <a href="https://www.youtube.com/channel/${esc(u.youtube_channel_id)}" target="_blank" rel="noopener">channel ↗</a>` : ''}</div></div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        ${u.is_banned ? `<button class="btn small secondary" onclick="adminBanUser('${esc(u.email)}',true)">Unban</button>`
+                      : `<button class="btn small danger-outline" onclick="adminBanUser('${esc(u.email)}',false)">Ban</button>`}
+        ${u.role === 'premium' ? `<button class="btn small secondary" onclick="adminPromoteUser('${esc(u.email)}','user')">↓ User</button>`
+                               : `<button class="btn small secondary" onclick="adminPromoteUser('${esc(u.email)}','premium')">↑ Premium</button>`}
+      </div>
+    </div>`).join('');
+  return vHeader('🛠 Admin') + `
+  <div class="screen">
+    <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('profile')">← Back</button>
+    <div class="label" style="margin-top:14px">Stats</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${tile('Users', s.users)}${tile('Active campaigns', s.active_tasks)}${tile('Coins in circ.', s.total_coins_in_circulation)}${tile('Banned', s.banned_users)}
+    </div>
+    <div class="label" style="margin-top:18px">API mode (currently: ${esc(A.mode)})</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn ${A.mode === 'live' ? '' : 'secondary'}" style="flex:1" onclick="adminSetMode('live')">Live (API verify)</button>
+      <button class="btn ${A.mode === 'degraded' ? '' : 'secondary'}" style="flex:1" onclick="adminSetMode('degraded')">Honor mode</button>
+    </div>
+    <div class="label" style="margin-top:18px">Economy & limits</div>
+    <div class="card">${fields}</div>
+    <button class="btn" onclick="adminSave()" ${A.saving ? 'disabled' : ''}>${A.saving ? 'Saving…' : 'Save settings'}</button>
+    ${A.err ? `<p class="error">${esc(A.err)}</p>` : ''}${A.msg ? `<p class="success-text">${esc(A.msg)}</p>` : ''}
+    <div class="label" style="margin-top:22px">Users</div>
+    <div style="display:flex;gap:8px">
+      <input type="text" placeholder="Search email…" value="${esc(A.userQuery)}" oninput="A.userQuery=this.value" style="flex:1">
+      <button class="btn small secondary" style="white-space:nowrap" onclick="adminSearchUsers()">Search</button>
+      <button class="btn small" style="white-space:nowrap" onclick="adminTopCreators()">🔔 Top creators</button>
+    </div>
+    ${A.userErr ? `<p class="error">${esc(A.userErr)}</p>` : ''}
+    <div style="margin-top:10px">${users || `<div class="hint">Search for a user by email.</div>`}</div>
+  </div>`;
+}
+
 function vTabbar() {
-  const tabs = [['earn', '📋'], ['grow', '📈'], ['wallet', '🪙'], ['profile', '👤']];
+  const tabs = [['home', '🏠'], ['earn', '📋'], ['grow', '📈'], ['wallet', '🪙'], ['profile', '👤']];
   return `<div class="tabbar">${tabs.map(([k, i]) =>
     `<button class="${S.tab === k ? 'active' : ''}" onclick="loadTab('${k}')"><span class="ico">${i}</span>${tr('tabs.' + k)}</button>`).join('')}</div>`;
 }
@@ -382,16 +559,17 @@ function setCType(t) { C.type = t; C.error = ''; C.ok = ''; render(); }
 function render() {
   const root = document.getElementById('app');
   if (!S.token) { root.innerHTML = vLogin(); return; }
-  const view = { earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile }[S.tab] || vEarn;
+  const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin }[S.tab] || vEarn;
   root.innerHTML = view() + vTabbar() + vModal();
 }
 
 // expose handlers used in inline HTML
-Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, render, C });
+Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A,
+  gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {
   if (S.token) {
-    try { S.user = await api.me(); await loadTab('earn'); }
+    try { S.user = await api.me(); await loadTab('home'); }
     catch { /* expired token already handled */ render(); }
   } else render();
 })();

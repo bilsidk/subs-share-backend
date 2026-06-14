@@ -127,6 +127,27 @@ const createTask = async (req, res, next) => {
       }
     }
 
+    // Every campaign must hang off an owner channel — the feed, "my campaigns",
+    // and verify queries all INNER JOIN channels. Subscribe tasks pass an explicit
+    // channel_id; video tasks (like/like_comment/watch) don't, so fall back to the
+    // user's own channel. Without this, a video campaign charges coins but is then
+    // invisible everywhere (null channel_id is dropped by every JOIN) and can never
+    // be completed — the owner just loses the coins.
+    let effectiveChannelId = channel_id;
+    if (!effectiveChannelId) {
+      const own = await client.query(
+        `SELECT id FROM channels WHERE user_id=$1
+         ORDER BY (youtube_channel_id = (SELECT youtube_channel_id FROM users WHERE id=$1)) DESC NULLS LAST, id ASC
+         LIMIT 1`,
+        [req.userId]
+      );
+      if (!own.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Add your YouTube channel before creating a campaign.' });
+      }
+      effectiveChannelId = own.rows[0].id;
+    }
+
     if (!isOwner) {
       const activeCount = await client.query(
         `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
@@ -150,7 +171,7 @@ const createTask = async (req, res, next) => {
       `INSERT INTO tasks (channel_id,task_type,reward,remaining_slots,total_slots,
                           target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier)
        VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [channel_id || null, task_type, taskReward, slots,
+      [effectiveChannelId, task_type, taskReward, slots,
        target_video_id, target_video_url||null,
        watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier]
     );

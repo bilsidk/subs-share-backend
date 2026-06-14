@@ -5,28 +5,29 @@
 
 // Same list/order as the mobile app's SUPPORTED_LANGUAGES
 const LANGS = {
-  en:      { native: 'English',              flag: '🇬🇧', rtl: false },
-  ar:      { native: 'العربية',               flag: '🇸🇦', rtl: true  },
-  fr:      { native: 'Français',              flag: '🇫🇷', rtl: false },
-  es:      { native: 'Español',               flag: '🇪🇸', rtl: false },
-  pt:      { native: 'Português',             flag: '🇧🇷', rtl: false },
-  tr:      { native: 'Türkçe',                flag: '🇹🇷', rtl: false },
-  id:      { native: 'Bahasa Indonesia',      flag: '🇮🇩', rtl: false },
-  hi:      { native: 'हिन्दी',                  flag: '🇮🇳', rtl: false },
-  ru:      { native: 'Русский',               flag: '🇷🇺', rtl: false },
-  de:      { native: 'Deutsch',               flag: '🇩🇪', rtl: false },
-  'zh-CN': { native: '简体中文',                flag: '🇨🇳', rtl: false },
-  'zh-TW': { native: '繁體中文',                flag: '🇹🇼', rtl: false },
-  bn:      { native: 'বাংলা',                  flag: '🇧🇩', rtl: false },
-  ja:      { native: '日本語',                  flag: '🇯🇵', rtl: false },
-  ko:      { native: '한국어',                  flag: '🇰🇷', rtl: false },
+  en:      { native: 'English',              cc: 'gb', rtl: false },
+  ar:      { native: 'العربية',               cc: 'sa', rtl: true  },
+  fr:      { native: 'Français',              cc: 'fr', rtl: false },
+  es:      { native: 'Español',               cc: 'es', rtl: false },
+  pt:      { native: 'Português',             cc: 'br', rtl: false },
+  tr:      { native: 'Türkçe',                cc: 'tr', rtl: false },
+  id:      { native: 'Bahasa Indonesia',      cc: 'id', rtl: false },
+  hi:      { native: 'हिन्दी',                  cc: 'in', rtl: false },
+  ru:      { native: 'Русский',               cc: 'ru', rtl: false },
+  de:      { native: 'Deutsch',               cc: 'de', rtl: false },
+  'zh-CN': { native: '简体中文',                cc: 'cn', rtl: false },
+  'zh-TW': { native: '繁體中文',                cc: 'tw', rtl: false },
+  bn:      { native: 'বাংলা',                  cc: 'bd', rtl: false },
+  ja:      { native: '日本語',                  cc: 'jp', rtl: false },
+  ko:      { native: '한국어',                  cc: 'kr', rtl: false },
 };
 
 const T = {
   en: {
     common: { privacy: 'Privacy', terms: 'Terms', done: 'Done', cancel: 'Cancel', requestFailed: 'Request failed', sessionExpired: 'Session expired — sign in again.' },
     login: { tagline: 'Earn coins by supporting other creators.<br>Spend them to grow your channel.', continue: 'Continue with Google', signingIn: 'Signing in…', disclaimer: 'We use your Google account to verify YouTube actions.', cancelled: 'Sign-in cancelled.', closed: 'Sign-in was closed.', loading: 'Google sign-in is still loading — try again in a second.' },
-    tabs: { earn: 'Earn', grow: 'Grow', wallet: 'Wallet', profile: 'Profile' },
+    tabs: { home: 'Home', earn: 'Earn', grow: 'Grow', wallet: 'Wallet', profile: 'Profile' },
+    home: { balance: 'Your balance', coinHint: 'Complete tasks, earn more coins', campaigns: 'Campaigns', completed: 'Completed', earnCoins: '📋 Earn coins', getSubs: '📈 Grow', recentActivity: 'Recent activity', noTransactions: 'No transactions yet' },
     earn: { title: 'Earn Coins', all: 'All', none: 'No tasks right now.', checkBack: 'Pull down or check back soon!', left: 'left', min: 'min' },
     task: { subscribe: 'Subscribe', like: 'Like', like_comment: 'Like + Comment', subscribe_like: 'Sub + Like', watch: 'Watch' },
     steps: {
@@ -37,10 +38,10 @@ const T = {
       watch: '1. Open the video<br>2. Watch at least <b>{{min}} minute(s)</b><br>3. Come back and verify',
     },
     modal: { open: '▶ Open YouTube', verify: 'Verify & Claim', verifying: 'Verifying…', verifyIn: 'Verify ({{s}}s)', openFirst: 'Open YouTube first — the timer starts when you do.', waitMore: 'Wait {{s}}s more, then verify.', done: 'Done' },
-    grow: { title: 'Grow', type: 'Campaign type', videoUrl: 'Your video URL', minutes: 'Minutes to watch (1–60)', howManySubs: 'How many subscribers?', howManyCompletions: 'How many completions?', price: '≈ {{cost}} coins total ({{per}}/slot — earner gets {{reward}}{{extra}}). Final price confirmed by server.', extraMin: ' + 1/extra min', create: 'Create Campaign', creating: 'Creating…', mine: 'My campaigns', none: 'No campaigns yet — create one above!', done: 'done', pause: 'Pause', resume: 'Resume', cancel: 'Cancel', errSlots: 'Enter how many slots you want.', errVideo: 'Paste your YouTube video URL.', errChannel: 'No YouTube channel linked to your account. Sign out and back in to register it.', created: 'Campaign created! Spent {{coins}} coins.', createdFree: 'Campaign created (free — owner).', cancelConfirm: 'Cancel this campaign? Remaining slots are refunded.' },
+    grow: { title: 'Grow', type: 'Campaign type', videoUrl: 'Your video URL', minutes: 'Minutes to watch (1–60)', howManySubs: 'How many subscribers?', howManyCompletions: 'How many completions?', price: '≈ {{cost}} coins total ({{per}}/slot — earner gets {{reward}}{{extra}}). Final price confirmed by server.', extraMin: ' + 1/extra min', create: 'Create Campaign', creating: 'Creating…', mine: 'My campaigns', none: 'No campaigns yet — create one above!', done: 'done', pause: 'Pause', resume: 'Resume', cancel: 'Cancel', errSlots: 'Enter how many slots you want.', errVideo: 'Paste your YouTube video URL.', errChannel: 'Pick or add a channel to grow.', created: 'Campaign created! Spent {{coins}} coins.', createdFree: 'Campaign created (free — owner).', cancelConfirm: 'Cancel this campaign? Remaining slots are refunded.', channelLabel: 'Channel to grow', addChannel: 'Add channel', adding: 'Adding…', channelAdded: 'Channel added:', noChannelYet: 'No channel yet — add one below.' },
     status: { active: 'active', paused: 'paused', completed: 'completed', cancelled: 'cancelled' },
     wallet: { title: 'Wallet', none: 'No transactions yet.' },
-    profile: { title: 'Profile', coins: 'Coins', role: 'Role', channel: 'Channel', linked: 'Linked', support: 'Support', language: 'Language', signOut: 'Sign Out', deleteAccount: 'Delete Account', deleteConfirm: 'Permanently delete your account and all data? This cannot be undone.' },
+    profile: { title: 'Profile', coins: 'Coins', role: 'Role', channel: 'Channel', linked: 'Linked', support: 'Support', language: 'Language', admin: 'Admin Panel', signOut: 'Sign Out', deleteAccount: 'Delete Account', deleteConfirm: 'Permanently delete your account and all data? This cannot be undone.' },
     tx: { welcome: '🎁 Welcome bonus', created: '📣 Campaign created — {{type}}, {{slots}} slots', free: ' (free)', completed: '✅ Task completed — {{type}}', completedComment: '✅ Task + comment bonus — {{type}}', refund: '↩️ Campaign refund', reclaimed: '⚠️ Coins reclaimed — {{type}}' },
   },
 
@@ -338,6 +339,49 @@ const T = {
     tx: { welcome: '🎁 환영 보너스', created: '📣 캠페인 생성 — {{type}}, {{slots}} 슬롯', free: ' (무료)', completed: '✅ 작업 완료 — {{type}}', completedComment: '✅ 작업 + 댓글 보너스 — {{type}}', refund: '↩️ 캠페인 환불', reclaimed: '⚠️ 코인 회수 — {{type}}' },
   },
 };
+
+// Translations for the newer screens (Home, channel-add, admin label), merged in
+// per language so every page is localized — not just English.
+const EXTRA = {
+  ar: { tabs: { home: 'الرئيسية' }, profile: { admin: 'لوحة الإدارة' }, grow: { channelLabel: 'القناة المراد تنميتها', addChannel: 'إضافة قناة', adding: 'جارٍ الإضافة…', channelAdded: 'تمت إضافة القناة:', noChannelYet: 'لا توجد قناة بعد — أضف واحدة بالأسفل.' }, home: { balance: 'رصيدك', coinHint: 'أنجز المهام واكسب المزيد من العملات', campaigns: 'الحملات', completed: 'مكتملة', earnCoins: '📋 اكسب عملات', getSubs: '📈 نمِّ', recentActivity: 'النشاط الأخير', noTransactions: 'لا توجد معاملات بعد' } },
+  fr: { tabs: { home: 'Accueil' }, profile: { admin: 'Panneau admin' }, grow: { channelLabel: 'Chaîne à développer', addChannel: 'Ajouter une chaîne', adding: 'Ajout…', channelAdded: 'Chaîne ajoutée :', noChannelYet: 'Aucune chaîne — ajoutez-en une ci-dessous.' }, home: { balance: 'Votre solde', coinHint: 'Accomplissez des tâches, gagnez plus de pièces', campaigns: 'Campagnes', completed: 'Terminées', earnCoins: '📋 Gagner des pièces', getSubs: '📈 Booster', recentActivity: 'Activité récente', noTransactions: 'Aucune transaction' } },
+  es: { tabs: { home: 'Inicio' }, profile: { admin: 'Panel de administración' }, grow: { channelLabel: 'Canal a hacer crecer', addChannel: 'Añadir canal', adding: 'Añadiendo…', channelAdded: 'Canal añadido:', noChannelYet: 'Aún no hay canal — añade uno abajo.' }, home: { balance: 'Tu saldo', coinHint: 'Completa tareas, gana más monedas', campaigns: 'Campañas', completed: 'Completadas', earnCoins: '📋 Gana monedas', getSubs: '📈 Crecer', recentActivity: 'Actividad reciente', noTransactions: 'Aún no hay transacciones' } },
+  pt: { tabs: { home: 'Início' }, profile: { admin: 'Painel de administração' }, grow: { channelLabel: 'Canal para crescer', addChannel: 'Adicionar canal', adding: 'Adicionando…', channelAdded: 'Canal adicionado:', noChannelYet: 'Nenhum canal ainda — adicione um abaixo.' }, home: { balance: 'Seu saldo', coinHint: 'Conclua tarefas, ganhe mais moedas', campaigns: 'Campanhas', completed: 'Concluídas', earnCoins: '📋 Ganhar moedas', getSubs: '📈 Crescer', recentActivity: 'Atividade recente', noTransactions: 'Nenhuma transação ainda' } },
+  tr: { tabs: { home: 'Ana sayfa' }, profile: { admin: 'Yönetici paneli' }, grow: { channelLabel: 'Büyütülecek kanal', addChannel: 'Kanal ekle', adding: 'Ekleniyor…', channelAdded: 'Kanal eklendi:', noChannelYet: 'Henüz kanal yok — aşağıdan ekleyin.' }, home: { balance: 'Bakiyeniz', coinHint: 'Görevleri tamamla, daha çok coin kazan', campaigns: 'Kampanyalar', completed: 'Tamamlanan', earnCoins: '📋 Coin kazan', getSubs: '📈 Büyüt', recentActivity: 'Son etkinlik', noTransactions: 'Henüz işlem yok' } },
+  id: { tabs: { home: 'Beranda' }, profile: { admin: 'Panel admin' }, grow: { channelLabel: 'Channel untuk ditumbuhkan', addChannel: 'Tambah channel', adding: 'Menambahkan…', channelAdded: 'Channel ditambahkan:', noChannelYet: 'Belum ada channel — tambahkan di bawah.' }, home: { balance: 'Saldo kamu', coinHint: 'Selesaikan tugas, dapat lebih banyak koin', campaigns: 'Kampanye', completed: 'Selesai', earnCoins: '📋 Hasilkan koin', getSubs: '📈 Tumbuh', recentActivity: 'Aktivitas terbaru', noTransactions: 'Belum ada transaksi' } },
+  hi: { tabs: { home: 'होम' }, profile: { admin: 'एडमिन पैनल' }, grow: { channelLabel: 'बढ़ाने के लिए चैनल', addChannel: 'चैनल जोड़ें', adding: 'जोड़ रहे हैं…', channelAdded: 'चैनल जोड़ा गया:', noChannelYet: 'अभी कोई चैनल नहीं — नीचे एक जोड़ें।' }, home: { balance: 'आपका बैलेंस', coinHint: 'कार्य पूरे करें, अधिक सिक्के कमाएँ', campaigns: 'अभियान', completed: 'पूर्ण', earnCoins: '📋 सिक्के कमाएँ', getSubs: '📈 बढ़ाएँ', recentActivity: 'हाल की गतिविधि', noTransactions: 'अभी कोई लेन-देन नहीं' } },
+  ru: { tabs: { home: 'Главная' }, profile: { admin: 'Панель администратора' }, grow: { channelLabel: 'Канал для роста', addChannel: 'Добавить канал', adding: 'Добавление…', channelAdded: 'Канал добавлен:', noChannelYet: 'Пока нет канала — добавьте ниже.' }, home: { balance: 'Ваш баланс', coinHint: 'Выполняйте задания, зарабатывайте больше монет', campaigns: 'Кампании', completed: 'Выполнено', earnCoins: '📋 Заработать монеты', getSubs: '📈 Рост', recentActivity: 'Недавняя активность', noTransactions: 'Транзакций пока нет' } },
+  de: { tabs: { home: 'Start' }, profile: { admin: 'Admin-Bereich' }, grow: { channelLabel: 'Kanal zum Wachsen', addChannel: 'Kanal hinzufügen', adding: 'Wird hinzugefügt…', channelAdded: 'Kanal hinzugefügt:', noChannelYet: 'Noch kein Kanal — füge unten einen hinzu.' }, home: { balance: 'Dein Guthaben', coinHint: 'Aufgaben erledigen, mehr Münzen verdienen', campaigns: 'Kampagnen', completed: 'Abgeschlossen', earnCoins: '📋 Münzen verdienen', getSubs: '📈 Wachsen', recentActivity: 'Letzte Aktivität', noTransactions: 'Noch keine Transaktionen' } },
+  'zh-CN': { tabs: { home: '首页' }, profile: { admin: '管理面板' }, grow: { channelLabel: '要增长的频道', addChannel: '添加频道', adding: '添加中…', channelAdded: '已添加频道：', noChannelYet: '还没有频道 — 在下面添加一个。' }, home: { balance: '你的余额', coinHint: '完成任务，赚取更多金币', campaigns: '活动', completed: '已完成', earnCoins: '📋 赚取金币', getSubs: '📈 增长', recentActivity: '最近动态', noTransactions: '暂无交易' } },
+  'zh-TW': { tabs: { home: '首頁' }, profile: { admin: '管理面板' }, grow: { channelLabel: '要成長的頻道', addChannel: '新增頻道', adding: '新增中…', channelAdded: '已新增頻道：', noChannelYet: '還沒有頻道 — 在下面新增一個。' }, home: { balance: '你的餘額', coinHint: '完成任務，賺取更多金幣', campaigns: '活動', completed: '已完成', earnCoins: '📋 賺取金幣', getSubs: '📈 成長', recentActivity: '最近動態', noTransactions: '尚無交易' } },
+  bn: { tabs: { home: 'হোম' }, profile: { admin: 'অ্যাডমিন প্যানেল' }, grow: { channelLabel: 'বাড়ানোর চ্যানেল', addChannel: 'চ্যানেল যোগ করুন', adding: 'যোগ করা হচ্ছে…', channelAdded: 'চ্যানেল যোগ হয়েছে:', noChannelYet: 'এখনও কোনো চ্যানেল নেই — নিচে একটি যোগ করুন।' }, home: { balance: 'আপনার ব্যালেন্স', coinHint: 'কাজ সম্পন্ন করুন, আরও কয়েন আয় করুন', campaigns: 'ক্যাম্পেইন', completed: 'সম্পন্ন', earnCoins: '📋 কয়েন আয় করুন', getSubs: '📈 বৃদ্ধি', recentActivity: 'সাম্প্রতিক কার্যকলাপ', noTransactions: 'এখনও কোনো লেনদেন নেই' } },
+  ja: { tabs: { home: 'ホーム' }, profile: { admin: '管理パネル' }, grow: { channelLabel: '成長させるチャンネル', addChannel: 'チャンネルを追加', adding: '追加中…', channelAdded: 'チャンネルを追加しました:', noChannelYet: 'まだチャンネルがありません — 下から追加してください。' }, home: { balance: '残高', coinHint: 'タスクを完了してコインを稼ごう', campaigns: 'キャンペーン', completed: '完了', earnCoins: '📋 コインを稼ぐ', getSubs: '📈 成長', recentActivity: '最近のアクティビティ', noTransactions: 'まだ取引がありません' } },
+  ko: { tabs: { home: '홈' }, profile: { admin: '관리자 패널' }, grow: { channelLabel: '성장시킬 채널', addChannel: '채널 추가', adding: '추가 중…', channelAdded: '채널 추가됨:', noChannelYet: '아직 채널이 없습니다 — 아래에서 추가하세요.' }, home: { balance: '잔액', coinHint: '작업을 완료하고 더 많은 코인을 받으세요', campaigns: '캠페인', completed: '완료', earnCoins: '📋 코인 획득', getSubs: '📈 성장', recentActivity: '최근 활동', noTransactions: '아직 거래 내역이 없습니다' } },
+};
+for (const lang in EXTRA) {
+  if (!T[lang]) continue;
+  for (const sec in EXTRA[lang]) T[lang][sec] = Object.assign({}, T[lang][sec], EXTRA[lang][sec]);
+}
+
+// Pricing line without the "earner gets ..." detail (not shown to buyers)
+const PRICE = {
+  en: '≈ {{cost}} coins total ({{per}}/slot). Final price confirmed by server.',
+  ar: '≈ {{cost}} عملة إجمالًا ({{per}}/خانة). يؤكّد الخادم السعر النهائي.',
+  fr: '≈ {{cost}} pièces au total ({{per}}/place). Prix final confirmé par le serveur.',
+  es: '≈ {{cost}} monedas en total ({{per}}/cupo). Precio final confirmado por el servidor.',
+  pt: '≈ {{cost}} moedas no total ({{per}}/vaga). Preço final confirmado pelo servidor.',
+  tr: '≈ toplam {{cost}} coin ({{per}}/kontenjan). Son fiyatı sunucu onaylar.',
+  id: '≈ total {{cost}} koin ({{per}}/slot). Harga akhir dikonfirmasi server.',
+  hi: '≈ कुल {{cost}} सिक्के ({{per}}/स्लॉट)। अंतिम मूल्य सर्वर तय करता है।',
+  ru: '≈ {{cost}} монет всего ({{per}}/слот). Итоговую цену подтверждает сервер.',
+  de: '≈ {{cost}} Münzen gesamt ({{per}}/Platz). Endpreis bestätigt der Server.',
+  'zh-CN': '≈ 共 {{cost}} 金币（{{per}}/名额）。最终价格由服务器确认。',
+  'zh-TW': '≈ 共 {{cost}} 金幣（{{per}}/名額）。最終價格由伺服器確認。',
+  bn: '≈ মোট {{cost}} কয়েন ({{per}}/স্লট)। চূড়ান্ত দাম সার্ভার নিশ্চিত করে।',
+  ja: '≈ 合計 {{cost}} コイン（{{per}}/枠）。最終価格はサーバーが確定します。',
+  ko: '≈ 총 {{cost}} 코인 ({{per}}/슬롯). 최종 가격은 서버가 확정합니다.',
+};
+for (const lang in PRICE) { if (T[lang] && T[lang].grow) T[lang].grow.price = PRICE[lang]; }
 
 const STORAGE_KEY = 'subsshare_lang';
 
