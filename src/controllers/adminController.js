@@ -117,7 +117,10 @@ const getUsers = async (req, res, next) => {
        ORDER BY ${orderBy} LIMIT $1 OFFSET $2`,
       params
     );
-    const total = await pool.query(`SELECT COUNT(*) FROM users ${where}`, email ? [email] : []);
+    const total = await pool.query(
+      email ? 'SELECT COUNT(*) FROM users WHERE LOWER(email) LIKE $1' : 'SELECT COUNT(*) FROM users',
+      email ? [email] : []
+    );
     res.json({ users: r.rows, total: parseInt(total.rows[0].count), page, pages: Math.ceil(total.rows[0].count / limit) });
   } catch (err) { next(err); }
 };
