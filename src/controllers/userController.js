@@ -30,6 +30,17 @@ const deleteMe = async (req, res, next) => {
     const userId = req.userId;
     await client.query('BEGIN');
 
+    // Preserve the welcome-bonus flag so deleting + re-signing-up with the same
+    // Google account can't re-farm the 50-coin bonus.
+    const who = await client.query('SELECT google_id FROM users WHERE id=$1', [userId]);
+    if (who.rows[0]?.google_id) {
+      await client.query(
+        `INSERT INTO account_history (google_id, bonus_granted, updated_at) VALUES ($1, TRUE, NOW())
+         ON CONFLICT (google_id) DO UPDATE SET bonus_granted=TRUE, updated_at=NOW()`,
+        [who.rows[0].google_id]
+      );
+    }
+
     // 1. Other users' completions earned on THIS user's campaigns
     //    (FK completions.task_id -> tasks.id, so these must go before the tasks)
     await client.query(

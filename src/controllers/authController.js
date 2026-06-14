@@ -68,11 +68,20 @@ const googleSignIn = async (req, res, next) => {
     const isNew = new Date(user.created_at).getTime() > Date.now() - 5000;
 
     if (isNew) {
-      await pool.query(
-        `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,50,'bonus','tx:welcome_bonus')`,
-        [user.id]
-      );
-      await pool.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [user.id]);
+      // Welcome bonus only once per Google account — even after delete + re-signup
+      const hist = await pool.query('SELECT bonus_granted FROM account_history WHERE google_id=$1', [google_id]);
+      if (hist.rows[0]?.bonus_granted !== true) {
+        await pool.query(
+          `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,50,'bonus','tx:welcome_bonus')`,
+          [user.id]
+        );
+        await pool.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [user.id]);
+        await pool.query(
+          `INSERT INTO account_history (google_id, bonus_granted, updated_at) VALUES ($1, TRUE, NOW())
+           ON CONFLICT (google_id) DO UPDATE SET bonus_granted=TRUE, updated_at=NOW()`,
+          [google_id]
+        );
+      }
     }
 
     // Auto-register YouTube channel
