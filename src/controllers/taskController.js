@@ -120,10 +120,17 @@ const createTask = async (req, res, next) => {
     await client.query('BEGIN');
 
     if (requiresChannel) {
-      const chRes = await client.query('SELECT id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
+      const chRes = await client.query('SELECT id, youtube_channel_id FROM channels WHERE id=$1 AND user_id=$2', [channel_id, req.userId]);
       if (!chRes.rows.length) {
         await client.query('ROLLBACK');
         return res.status(403).json({ error: 'Channel not found or not yours' });
+      }
+      // A subscribe target must be a real YouTube channel id (UC…). Legacy/garbage
+      // channels can't be verified by anyone, so block the campaign at the source
+      // rather than charging coins for a task that can never complete.
+      if (!/^UC[A-Za-z0-9_-]{20,}$/.test(chRes.rows[0].youtube_channel_id || '')) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'This channel has an invalid YouTube ID. Remove it and re-add the channel using its real youtube.com/@handle or /channel/UC… link.' });
       }
     }
 
