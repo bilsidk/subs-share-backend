@@ -24,6 +24,17 @@ async function runMigration() {
         updated_at    TIMESTAMP DEFAULT NOW()
       )`);
   } catch (e) { console.error('[migrate] account_history:', e.message); }
+
+  // 3. Store each user's own-channel subscriber count (for finding big creators).
+  try {
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscriber_count INTEGER DEFAULT 0`);
+    // Backfill existing users from their own channel's already-stored count.
+    await pool.query(`
+      UPDATE users u SET subscriber_count = c.subscriber_count
+      FROM channels c
+      WHERE c.youtube_channel_id = u.youtube_channel_id
+        AND COALESCE(u.subscriber_count, 0) = 0 AND COALESCE(c.subscriber_count, 0) > 0`);
+  } catch (e) { console.error('[migrate] users.subscriber_count:', e.message); }
 }
 
 module.exports = { runMigration };

@@ -106,12 +106,15 @@ const getUsers = async (req, res, next) => {
     const email = req.query.email ? `%${req.query.email.toLowerCase()}%` : null;
     const where = email ? 'WHERE LOWER(email) LIKE $3' : '';
     const params = email ? [limit, offset, email] : [limit, offset];
+    const orderBy = req.query.sort === 'subs'
+      ? 'subscriber_count DESC NULLS LAST, created_at DESC'
+      : 'created_at DESC';
     const r = await pool.query(
       `SELECT id, email, name, role, coins, is_banned, ban_reason, trust_score,
-              reclaim_count, created_at,
+              reclaim_count, created_at, subscriber_count, youtube_channel_id,
               (SELECT COUNT(*) FROM completions WHERE user_id=users.id) AS tasks_completed
        FROM users ${where}
-       ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+       ORDER BY ${orderBy} LIMIT $1 OFFSET $2`,
       params
     );
     const total = await pool.query(`SELECT COUNT(*) FROM users ${where}`, email ? [email] : []);

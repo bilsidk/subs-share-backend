@@ -124,7 +124,7 @@ const googleSignIn = async (req, res, next) => {
           const { getSubscriberCount } = require('../services/youtubeService');
           const subscriberCount = await getSubscriberCount(channelId);
 
-          await pool.query('UPDATE users SET youtube_channel_id=$1 WHERE id=$2', [channelId, user.id]);
+          await pool.query('UPDATE users SET youtube_channel_id=$1, subscriber_count=$2 WHERE id=$3', [channelId, subscriberCount, user.id]);
 
           const existing = await pool.query('SELECT id FROM channels WHERE user_id=$1', [user.id]);
           if (!existing.rows.length) {
