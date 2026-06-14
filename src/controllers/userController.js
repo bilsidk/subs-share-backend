@@ -1,4 +1,5 @@
 const pool = require('../db/pool');
+const { OWNER_EMAIL } = require('../config');
 
 const getMe = async (req, res, next) => {
   try {
@@ -14,6 +15,7 @@ const getMe = async (req, res, next) => {
     );
     if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
     const user = r.rows[0];
+    user.is_admin = user.role === 'owner' || user.email?.toLowerCase() === OWNER_EMAIL;
     delete user.youtube_access_token;
     delete user.youtube_refresh_token;
     delete user.youtube_token_expiry;
