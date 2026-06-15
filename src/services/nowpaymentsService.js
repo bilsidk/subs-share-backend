@@ -24,7 +24,6 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
       success_url,
       cancel_url,
       is_fixed_rate: true,
-      pay_currency: 'usdttrc20',
     }),
   });
   if (!res.ok) {
