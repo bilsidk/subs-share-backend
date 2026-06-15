@@ -2,6 +2,19 @@ const pool = require('../db/pool');
 const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
 const { MIN_PURCHASE_USD, calcPurchase } = require('../config');
 
+// Only let the client choose the post-payment return origin from a known list,
+// so the success/cancel redirect can't be turned into an open redirect.
+const RETURN_ALLOWLIST = ['app.viralboostnow.com', 'viralboostnow.com', 'localhost'];
+function resolveReturnBase(url) {
+  if (typeof url !== 'string') return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' && u.hostname !== 'localhost') return null;
+    const ok = RETURN_ALLOWLIST.includes(u.hostname) || u.hostname.endsWith('.railway.app');
+    return ok ? u.origin : null;
+  } catch { return null; }
+}
+
 async function getTiers(req, res) {
   res.json({ min_usd: MIN_PURCHASE_USD, rate: 200 });
 }
@@ -20,7 +33,7 @@ async function createCheckout(req, res, next) {
     const total_coins = tier.coins + bonus;
 
     const apiUrl = process.env.API_URL || `https://${req.get('host')}`;
-    const appUrl = process.env.APP_URL || apiUrl;
+    const appUrl = resolveReturnBase(req.body.return_url) || process.env.APP_URL || apiUrl;
 
     const invoice = await createInvoice({
       price_amount: tier.usd,

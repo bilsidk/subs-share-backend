@@ -43,6 +43,7 @@ const T = {
     wallet: { title: 'Wallet', none: 'No transactions yet.' },
     profile: { title: 'Profile', coins: 'Coins', role: 'Role', channel: 'Channel', linked: 'Linked', support: 'Support', language: 'Language', admin: 'Admin Panel', signOut: 'Sign Out', deleteAccount: 'Delete Account', deleteConfirm: 'Permanently delete your account and all data? This cannot be undone.' },
     tx: { welcome: '🎁 Welcome bonus', created: '📣 Campaign created — {{type}}, {{slots}} slots', free: ' (free)', completed: '✅ Task completed — {{type}}', completedComment: '✅ Task + comment bonus — {{type}}', refund: '↩️ Campaign refund', reclaimed: '⚠️ Coins reclaimed — {{type}}', purchase: '💰 Coins purchased — {{coins}} ({{usd}}$)' },
+    buy: { title: 'Buy coins', subtitle: 'Top up instantly with crypto — USDT, BTC and more.', buyNow: 'Buy', redirecting: 'Opening…', back: 'Wallet', noInvoice: 'Could not start checkout. Please try again.', secure: '🔒 Secure crypto checkout by NOWPayments. Coins are added automatically once your payment confirms.', success: '✅ Payment received — your coins have been added!', cancelled: 'Payment cancelled — you were not charged.' },
   },
 
   ar: {

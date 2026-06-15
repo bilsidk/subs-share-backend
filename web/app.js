@@ -27,7 +27,7 @@ const S = {
   tasks: [], taskFilter: null,
   myTasks: [], channels: [], txs: [],
   modal: null, // {task, status:'idle'|'countdown'|'ready'|'verifying'|'done', countdown, startedAt, error, message}
-  busy: false, loginError: '',
+  busy: false, loginError: '', payNotice: '',
 };
 let countdownTimer = null;
 
@@ -63,6 +63,7 @@ const api = {
   resume: (id) => req('PATCH', `/tasks/${id}/resume`),
   cancel: (id) => req('DELETE', `/tasks/${id}`),
   txs: (page = 1) => req('GET', '/transactions?page=' + page),
+  buyCoins: (amount) => req('POST', '/payments/create-checkout', { amount, return_url: location.origin }),
   adminStatus: () => req('GET', '/admin/status'),
   adminSaveSettings: (d) => req('PATCH', '/admin/settings', d),
   adminMode: (mode) => req('POST', '/admin/mode', { mode }),
@@ -81,6 +82,16 @@ const ADMIN_FIELDS = [
   ['daily_limit_user', 'Daily limit (user)'], ['daily_limit_premium', 'Daily limit (premium)'],
   ['max_campaigns_per_user', 'Max campaigns/user'],
 ];
+
+// ── buy coins (NowPayments) ───────────────────────────────────────────────────
+const COIN_PACKAGES = [20, 50, 100, 250];
+// Mirrors backend config.calcPurchase — display only; the server is authoritative.
+function pkgInfo(usd) {
+  const coins = Math.floor(usd * 200);
+  const bonusPct = Math.min(Math.floor(usd / 50) * 10, 50);
+  return { usd, coins, bonusPct, total: coins + Math.floor(coins * bonusPct / 100) };
+}
+const B = { busy: 0, error: '' }; // busy = the $ amount currently being processed
 
 // ── auth ──────────────────────────────────────────────────────────────────────
 function signIn() {
@@ -285,6 +296,18 @@ async function deleteAccount() {
   try { await api.deleteAccount(); signOut(); } catch (e) { alert(e.message); }
 }
 
+// ── buy coins ─────────────────────────────────────────────────────────────────
+async function buyCoins(usd) {
+  if (B.busy) return;
+  B.error = ''; B.busy = usd; render();
+  try {
+    const res = await api.buyCoins(usd);
+    if (res && res.invoice_url) { window.location.href = res.invoice_url; return; } // leave for hosted checkout
+    B.error = tr('buy.noInvoice');
+  } catch (e) { B.error = e.message; }
+  B.busy = 0; render();
+}
+
 // ── admin ───────────────────────────────────────────────────────────────────
 function gotoAdmin() { loadTab('admin'); }
 
@@ -438,12 +461,40 @@ function vGrow() {
 }
 
 function vWallet() {
+  const notice = S.payNotice
+    ? `<div class="card" style="border-color:var(--success);color:var(--success);text-align:center;font-weight:600">${esc(S.payNotice)}</div>` : '';
   const list = S.txs.length ? S.txs.map(tx => `
     <div class="tx">
       <div><div class="d">${esc(txText(tx.description))}</div><div class="t">${new Date(tx.created_at).toLocaleString()}</div></div>
       <div class="amt ${tx.type === 'spent' ? 'minus' : 'plus'}">${tx.type === 'spent' ? '−' : '+'}${tx.amount}</div>
     </div>`).join('') : `<div class="empty">${tr('wallet.none')}</div>`;
-  return vHeader(tr('wallet.title')) + `<div class="screen"><div class="card">${list}</div></div>`;
+  return vHeader(tr('wallet.title')) + `<div class="screen">
+    ${notice}
+    <button class="btn" style="margin-bottom:12px" onclick="loadTab('buy')">💰 ${tr('buy.title')}</button>
+    <div class="card">${list}</div></div>`;
+}
+
+function vBuy() {
+  const cards = COIN_PACKAGES.map(usd => {
+    const p = pkgInfo(usd);
+    const busy = B.busy === usd;
+    return `
+    <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-size:19px;font-weight:800;color:var(--gold)">🪙 ${p.total.toLocaleString()}</div>
+        <div class="hint">${p.bonusPct ? `<b style="color:var(--success)">+${p.bonusPct}%</b> · ` : ''}$${usd} USDT</div>
+      </div>
+      <button class="btn small" style="white-space:nowrap;min-width:104px" onclick="buyCoins(${usd})" ${B.busy ? 'disabled' : ''}>${busy ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
+    </div>`;
+  }).join('');
+  return vHeader(tr('buy.title')) + `
+  <div class="screen">
+    <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('wallet')">← ${tr('buy.back')}</button>
+    <p class="hint" style="margin:12px 0 10px">${tr('buy.subtitle')}</p>
+    ${cards}
+    ${B.error ? `<p class="error">${esc(B.error)}</p>` : ''}
+    <p class="hint" style="margin-top:14px">${tr('buy.secure')}</p>
+  </div>`;
 }
 
 function vProfile() {
@@ -561,17 +612,30 @@ function setCType(t) { C.type = t; C.error = ''; C.ok = ''; render(); }
 function render() {
   const root = document.getElementById('app');
   if (!S.token) { root.innerHTML = vLogin(); return; }
-  const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin }[S.tab] || vEarn;
+  const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin, buy: vBuy }[S.tab] || vEarn;
   root.innerHTML = view() + vTabbar() + vModal();
 }
 
 // expose handlers used in inline HTML
-Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A,
+Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, buyCoins,
   gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {
+  // NowPayments sends the buyer back to ?payment=success|cancelled after checkout.
+  const pay = new URLSearchParams(location.search).get('payment');
+  if (pay) history.replaceState({}, '', location.pathname); // clean the URL
   if (S.token) {
-    try { S.user = await api.me(); await loadTab('home'); }
-    catch { /* expired token already handled */ render(); }
+    try {
+      S.user = await api.me();
+      if (pay === 'success' || pay === 'cancelled') {
+        S.payNotice = window.I18N.t(pay === 'success' ? 'buy.success' : 'buy.cancelled');
+        await loadTab('wallet');
+        // Coins are credited server-side via IPN, which can lag the redirect a few
+        // seconds — re-pull the wallet shortly so the new balance/tx show up.
+        if (pay === 'success') setTimeout(() => loadTab('wallet'), 5000);
+      } else {
+        await loadTab('home');
+      }
+    } catch { render(); }
   } else render();
 })();
