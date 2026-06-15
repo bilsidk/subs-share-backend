@@ -2,10 +2,12 @@ const pool = require('../db/pool');
 const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
 
 const TIERS = [
-  { usd: 5, coins: 1000, bonus_pct: 0 },
-  { usd: 10, coins: 2200, bonus_pct: 10 },
-  { usd: 25, coins: 6000, bonus_pct: 20 },
-  { usd: 50, coins: 13000, bonus_pct: 30 },
+  { usd: 20,  coins: 4000,  bonus_pct: 0  },
+  { usd: 50,  coins: 10000, bonus_pct: 10 },
+  { usd: 100, coins: 20000, bonus_pct: 20 },
+  { usd: 150, coins: 30000, bonus_pct: 30 },
+  { usd: 200, coins: 40000, bonus_pct: 40 },
+  { usd: 500, coins: 100000, bonus_pct: 50 },
 ];
 
 async function getTiers(req, res) {
