@@ -1,6 +1,10 @@
 const crypto = require('crypto');
 
-const NOWPAYMENTS_API = 'https://api.nowpayments.io/v1';
+const PROD_API = 'https://api.nowpayments.io/v1';
+const SANDBOX_API = 'https://sandbox.nowpayments.io/v1';
+
+function isSandbox() { return process.env.NOWPAYMENTS_SANDBOX === 'true'; }
+function baseUrl() { return isSandbox() ? SANDBOX_API : PROD_API; }
 
 function getApiKey() {
   const key = process.env.NOWPAYMENTS_API_KEY;
@@ -8,23 +12,25 @@ function getApiKey() {
   return key;
 }
 
-async function createInvoice({ price_amount, order_id, order_description, ipn_callback_url, success_url, cancel_url }) {
-  const res = await fetch(`${NOWPAYMENTS_API}/invoice`, {
+async function createInvoice({ price_amount, order_id, order_description, ipn_callback_url, success_url, cancel_url, case: _case }) {
+  const body = {
+    price_amount,
+    price_currency: 'usd',
+    ipn_callback_url,
+    order_id,
+    order_description,
+    success_url,
+    cancel_url,
+    is_fixed_rate: true,
+  };
+  if (isSandbox() && _case) body.case = _case;
+  const res = await fetch(`${baseUrl()}/invoice`, {
     method: 'POST',
     headers: {
       'x-api-key': getApiKey(),
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      price_amount,
-      price_currency: 'usd',
-      ipn_callback_url,
-      order_id,
-      order_description,
-      success_url,
-      cancel_url,
-      is_fixed_rate: true,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.text();
