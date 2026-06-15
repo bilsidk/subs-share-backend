@@ -8,9 +8,11 @@ async function getTiers(req, res) {
 
 async function createCheckout(req, res, next) {
   try {
-    const { amount } = req.body;
-    if (!amount || amount < MIN_PURCHASE_USD)
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount < MIN_PURCHASE_USD)
       return res.status(400).json({ error: `Minimum purchase is $${MIN_PURCHASE_USD}` });
+    if (amount > 100000)
+      return res.status(400).json({ error: 'Amount too large' });
 
     const tier = calcPurchase(amount);
     const order_id = `CS_${req.userId}_${Date.now()}`;
@@ -56,18 +58,33 @@ async function handleIPN(req, res) {
     if (payment.status === 'finished') return res.json({ ok: true });
 
     if (payment_status === 'finished') {
-      const bonus = Math.floor(payment.coins * payment.bonus_pct / 100);
-      const total_coins = payment.coins + bonus;
+      // Exactly-once credit: claim the row atomically so duplicate/retried IPNs
+      // (NowPayments retries) can't double-credit. The whole claim+credit runs in
+      // one transaction, so a failure rolls the claim back and a retry can re-run.
+      const dbc = await pool.connect();
+      try {
+        await dbc.query('BEGIN');
+        const claim = await dbc.query(
+          `UPDATE pending_payments SET status='finished' WHERE invoice_id=$1 AND status <> 'finished'`,
+          [String(invoice_id)]
+        );
+        if (claim.rowCount === 0) { await dbc.query('ROLLBACK'); return res.json({ ok: true }); }
 
-      await pool.query('UPDATE users SET coins = coins + $1 WHERE id = $2', [total_coins, payment.user_id]);
-      await pool.query(
-        `INSERT INTO transactions (user_id, amount, type, description)
-         VALUES ($1, $2, 'purchase', $3)`,
-        [payment.user_id, total_coins, `tx:purchase|coins:${total_coins}|usd:${payment.usd}|invoice:${invoice_id}`]
-      );
-      await pool.query('UPDATE pending_payments SET status = $1 WHERE invoice_id = $2', ['finished', String(invoice_id)]);
+        const bonus = Math.floor(payment.coins * payment.bonus_pct / 100);
+        const total_coins = payment.coins + bonus;
+        await dbc.query('UPDATE users SET coins = coins + $1 WHERE id = $2', [total_coins, payment.user_id]);
+        await dbc.query(
+          `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, 'purchase', $3)`,
+          [payment.user_id, total_coins, `tx:purchase|coins:${total_coins}|usd:${payment.usd}|invoice:${invoice_id}`]
+        );
+        await dbc.query('COMMIT');
+      } catch (e) { await dbc.query('ROLLBACK'); throw e; }
+      finally { dbc.release(); }
     } else if (['failed', 'expired', 'cancelled'].includes(payment_status)) {
-      await pool.query('UPDATE pending_payments SET status = $1 WHERE invoice_id = $2', [payment_status, String(invoice_id)]);
+      await pool.query(
+        `UPDATE pending_payments SET status=$1 WHERE invoice_id=$2 AND status <> 'finished'`,
+        [payment_status, String(invoice_id)]
+      );
     }
 
     res.json({ ok: true });

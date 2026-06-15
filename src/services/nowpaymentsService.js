@@ -40,14 +40,17 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
 function verifyIPN(body, signature) {
   const secret = process.env.NOWPAYMENTS_IPN_SECRET;
   if (!secret) throw new Error('NOWPAYMENTS_IPN_SECRET not set');
-  const hmac = crypto.createHmac('sha512', secret);
-  const sorted = Object.keys(body).sort().reduce((acc, k) => {
-    if (body[k] !== null && body[k] !== undefined) acc[k] = body[k];
-    return acc;
-  }, {});
-  const data = JSON.stringify(sorted);
-  hmac.update(data);
-  return hmac.digest('hex') === signature;
+  if (!signature || typeof signature !== 'string') return false;
+  // Must reproduce NowPayments' signing byte-for-byte: JSON with top-level keys
+  // sorted and null fields KEPT (their canonical method). The previous version
+  // stripped nulls, so any IPN carrying a null field (common on early statuses)
+  // failed verification and the payment never credited.
+  const data = JSON.stringify(body, Object.keys(body).sort());
+  const digest = crypto.createHmac('sha512', secret).update(data).digest('hex');
+  // Constant-time compare to avoid leaking the signature via response timing.
+  const a = Buffer.from(digest);
+  const b = Buffer.from(signature);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 module.exports = { createInvoice, verifyIPN };
