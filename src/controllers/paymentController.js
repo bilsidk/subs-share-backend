@@ -1,25 +1,18 @@
 const pool = require('../db/pool');
 const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
-
-const TIERS = [
-  { usd: 20,  coins: 4000,  bonus_pct: 0  },
-  { usd: 50,  coins: 10000, bonus_pct: 10 },
-  { usd: 100, coins: 20000, bonus_pct: 20 },
-  { usd: 150, coins: 30000, bonus_pct: 30 },
-  { usd: 200, coins: 40000, bonus_pct: 40 },
-  { usd: 500, coins: 100000, bonus_pct: 50 },
-];
+const { MIN_PURCHASE_USD, calcPurchase } = require('../config');
 
 async function getTiers(req, res) {
-  res.json({ tiers: TIERS });
+  res.json({ min_usd: MIN_PURCHASE_USD, rate: 200 });
 }
 
 async function createCheckout(req, res, next) {
   try {
-    const { tier_index } = req.body;
-    const tier = TIERS[tier_index];
-    if (!tier) return res.status(400).json({ error: 'Invalid tier' });
+    const { amount } = req.body;
+    if (!amount || amount < MIN_PURCHASE_USD)
+      return res.status(400).json({ error: `Minimum purchase is $${MIN_PURCHASE_USD}` });
 
+    const tier = calcPurchase(amount);
     const order_id = `CS_${req.userId}_${Date.now()}`;
     const bonus = Math.floor(tier.coins * tier.bonus_pct / 100);
     const total_coins = tier.coins + bonus;

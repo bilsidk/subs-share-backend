@@ -39,12 +39,11 @@ module.exports = {
   TRUST_PENALTY: 15,
 
   // NowPayments price tiers
-  PRICE_TIERS: [
-    { usd: 20,  coins: 4000,  bonus_pct: 0  },
-    { usd: 50,  coins: 10000, bonus_pct: 10 },
-    { usd: 100, coins: 20000, bonus_pct: 20 },
-    { usd: 150, coins: 30000, bonus_pct: 30 },
-    { usd: 200, coins: 40000, bonus_pct: 40 },
-    { usd: 500, coins: 100000, bonus_pct: 50 },
-  ],
+  MIN_PURCHASE_USD: 20,
+  calcPurchase(usd) {
+    const coins = Math.floor(usd * 200);
+    const bonus_pct = Math.min(Math.floor(usd / 50) * 10, 50);
+    const total = coins + Math.floor(coins * bonus_pct / 100);
+    return { usd, coins, bonus_pct, total };
+  },
 };
