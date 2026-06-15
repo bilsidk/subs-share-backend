@@ -661,9 +661,9 @@ Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask,
       if (pay === 'success' || pay === 'cancelled') {
         S.payNotice = window.I18N.t(pay === 'success' ? 'buy.success' : 'buy.cancelled');
         await loadTab('wallet');
-        // Coins are credited server-side via IPN, which can lag the redirect a few
-        // seconds — re-pull the wallet shortly so the new balance/tx show up.
-        if (pay === 'success') setTimeout(() => loadTab('wallet'), 5000);
+        // Credit happens server-side via IPN, which can lag the redirect by up to a
+        // minute — re-pull the wallet a few times so the balance/tx appear on their own.
+        if (pay === 'success') { let n = 0; const p = setInterval(() => { if (++n > 6) return clearInterval(p); loadTab('wallet'); }, 5000); }
       } else {
         await loadTab('home');
       }
