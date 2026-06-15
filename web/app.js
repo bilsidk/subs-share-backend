@@ -144,8 +144,10 @@ function txText(desc) {
     case 'campaign_created': return tr('tx.created', { type, slots: parts.slots }) + (parts.free ? tr('tx.free') : '');
     case 'task_completed': return tr('tx.completed', { type });
     case 'task_completed_comment': return tr('tx.completedComment', { type });
-    case 'campaign_refund': return tr('tx.refund');
+    case 'campaign_refund':
+    case 'campaign_cancelled': return tr('tx.refund');
     case 'coins_reclaimed': return tr('tx.reclaimed', { type });
+    case 'purchase': return tr('tx.purchase', { coins: parts.coins, usd: parts.usd });
     default: return desc.slice(3).replace(/\|/g, ' · ');
   }
 }

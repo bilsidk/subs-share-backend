@@ -42,7 +42,7 @@ const T = {
     status: { active: 'active', paused: 'paused', completed: 'completed', cancelled: 'cancelled' },
     wallet: { title: 'Wallet', none: 'No transactions yet.' },
     profile: { title: 'Profile', coins: 'Coins', role: 'Role', channel: 'Channel', linked: 'Linked', support: 'Support', language: 'Language', admin: 'Admin Panel', signOut: 'Sign Out', deleteAccount: 'Delete Account', deleteConfirm: 'Permanently delete your account and all data? This cannot be undone.' },
-    tx: { welcome: '🎁 Welcome bonus', created: '📣 Campaign created — {{type}}, {{slots}} slots', free: ' (free)', completed: '✅ Task completed — {{type}}', completedComment: '✅ Task + comment bonus — {{type}}', refund: '↩️ Campaign refund', reclaimed: '⚠️ Coins reclaimed — {{type}}' },
+    tx: { welcome: '🎁 Welcome bonus', created: '📣 Campaign created — {{type}}, {{slots}} slots', free: ' (free)', completed: '✅ Task completed — {{type}}', completedComment: '✅ Task + comment bonus — {{type}}', refund: '↩️ Campaign refund', reclaimed: '⚠️ Coins reclaimed — {{type}}', purchase: '💰 Coins purchased — {{coins}} ({{usd}}$)' },
   },
 
   ar: {
