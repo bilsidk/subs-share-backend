@@ -300,11 +300,22 @@ async function deleteAccount() {
 async function buyCoins(usd) {
   if (B.busy) return;
   B.error = ''; B.busy = usd; render();
+  // Open the tab synchronously inside the click gesture so it isn't popup-blocked;
+  // we point it at the hosted checkout once the invoice is created.
+  const win = window.open('about:blank', '_blank');
+  if (win) { try { win.document.write('<p style="font:16px sans-serif;padding:24px">Opening secure checkout…</p>'); } catch (_) {} }
   try {
     const res = await api.buyCoins(usd);
-    if (res && res.invoice_url) { window.location.href = res.invoice_url; return; } // leave for hosted checkout
+    if (res && res.invoice_url) {
+      if (win) win.location.href = res.invoice_url;       // checkout opens in the new tab
+      else window.location.href = res.invoice_url;        // popup blocked → fall back to this tab
+      B.busy = 0;
+      if (win) loadTab('wallet');                         // keep this tab on the wallet
+      return;
+    }
+    if (win) win.close();
     B.error = tr('buy.noInvoice');
-  } catch (e) { B.error = e.message; }
+  } catch (e) { if (win) win.close(); B.error = e.message; }
   B.busy = 0; render();
 }
 
