@@ -91,7 +91,7 @@ function pkgInfo(usd) {
   const bonusPct = Math.min(Math.floor(usd / 50) * 10, 50);
   return { usd, coins, bonusPct, total: coins + Math.floor(coins * bonusPct / 100) };
 }
-const B = { busy: 0, error: '' }; // busy = the $ amount currently being processed
+const B = { busy: 0, error: '', customUsd: '' }; // busy = the $ amount currently being processed
 
 // ── auth ──────────────────────────────────────────────────────────────────────
 function signIn() {
@@ -308,6 +308,29 @@ async function buyCoins(usd) {
   B.busy = 0; render();
 }
 
+// Live coins+bonus readout for the custom-amount field — recomputed on each
+// keystroke without a full re-render, so the input keeps focus.
+function customCoinsHTML(usd) {
+  const p = pkgInfo(usd);
+  return `🪙 <b style="color:var(--gold);font-size:18px">${p.total.toLocaleString()}</b> ${tr('buy.coins')}`
+    + (p.bonusPct ? ` <span style="color:var(--success)">(+${p.bonusPct}% ${tr('buy.bonus')})</span>` : '');
+}
+function updateCustomBuy() {
+  const inp = document.getElementById('custom-usd'); if (!inp) return;
+  B.customUsd = inp.value;
+  const usd = parseInt(inp.value, 10) || 0;
+  const valid = usd >= 20;
+  const out = document.getElementById('custom-coins');
+  const btn = document.getElementById('custom-buy-btn');
+  if (out) out.innerHTML = valid ? customCoinsHTML(usd) : `<span class="hint">${tr('buy.min')}</span>`;
+  if (btn) btn.disabled = valid && !B.busy ? false : true;
+}
+function buyCoinsCustom() {
+  const usd = parseInt(B.customUsd, 10) || 0;
+  if (usd < 20) { B.error = tr('buy.min'); return render(); }
+  buyCoins(usd);
+}
+
 // ── admin ───────────────────────────────────────────────────────────────────
 function gotoAdmin() { loadTab('admin'); }
 
@@ -487,11 +510,19 @@ function vBuy() {
       <button class="btn small" style="white-space:nowrap;min-width:104px" onclick="buyCoins(${usd})" ${B.busy ? 'disabled' : ''}>${busy ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
     </div>`;
   }).join('');
+  const cu = parseInt(B.customUsd, 10) || 0;
+  const cValid = cu >= 20;
   return vHeader(tr('buy.title')) + `
   <div class="screen">
     <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('wallet')">← ${tr('buy.back')}</button>
     <p class="hint" style="margin:12px 0 10px">${tr('buy.subtitle')}</p>
     ${cards}
+    <div class="label">${tr('buy.custom')}</div>
+    <div class="card">
+      <input id="custom-usd" type="number" min="20" step="1" inputmode="numeric" placeholder="20" value="${esc(String(B.customUsd || ''))}" oninput="updateCustomBuy()">
+      <div id="custom-coins" style="margin-top:10px;font-size:14.5px">${cValid ? customCoinsHTML(cu) : `<span class="hint">${tr('buy.min')}</span>`}</div>
+      <button id="custom-buy-btn" class="btn" style="margin-top:12px" onclick="buyCoinsCustom()" ${(!cValid || B.busy) ? 'disabled' : ''}>${(B.busy === cu && cu) ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
+    </div>
     ${B.error ? `<p class="error">${esc(B.error)}</p>` : ''}
     <p class="hint" style="margin-top:14px">${tr('buy.secure')}</p>
   </div>`;
@@ -617,7 +648,7 @@ function render() {
 }
 
 // expose handlers used in inline HTML
-Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, buyCoins,
+Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, buyCoins, buyCoinsCustom, updateCustomBuy,
   gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {
