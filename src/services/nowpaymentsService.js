@@ -14,7 +14,7 @@ function getApiKey() {
   return key;
 }
 
-async function createInvoice({ price_amount, order_id, order_description, ipn_callback_url, success_url, cancel_url, case: _case }) {
+async function createInvoice({ price_amount, order_id, order_description, ipn_callback_url, success_url, cancel_url }) {
   const body = {
     price_amount,
     price_currency: 'usd',
@@ -25,7 +25,6 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
     cancel_url,
     is_fixed_rate: true,
   };
-  if (isSandbox() && _case) body.case = _case;
   const res = await fetch(`${apiBase()}/invoice`, {
     method: 'POST',
     headers: {

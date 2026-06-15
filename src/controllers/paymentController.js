@@ -42,9 +42,6 @@ async function createCheckout(req, res, next) {
       ipn_callback_url: `${apiUrl}/payments/ipn`,
       success_url: `${appUrl}/?payment=success`,
       cancel_url: `${appUrl}/?payment=cancelled`,
-      // Sandbox only: auto-simulate a successful payment so the IPN fires without
-      // a real on-chain transfer. Ignored in production (createInvoice gates on sandbox).
-      case: process.env.NOWPAYMENTS_SANDBOX === 'true' ? (process.env.NOWPAYMENTS_SANDBOX_CASE || 'success') : undefined,
     });
 
     await pool.query(
