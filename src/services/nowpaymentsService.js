@@ -1,10 +1,8 @@
 const crypto = require('crypto');
 
-const PROD_API = 'https://api.nowpayments.io/v1';
-const SANDBOX_API = 'https://sandbox.nowpayments.io/v1';
+const NOWPAYMENTS_API = 'https://api.nowpayments.io/v1';
 
 function isSandbox() { return process.env.NOWPAYMENTS_SANDBOX === 'true'; }
-function baseUrl() { return isSandbox() ? SANDBOX_API : PROD_API; }
 
 function getApiKey() {
   const key = process.env.NOWPAYMENTS_API_KEY;
@@ -24,7 +22,7 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
     is_fixed_rate: true,
   };
   if (isSandbox() && _case) body.case = _case;
-  const res = await fetch(`${baseUrl()}/invoice`, {
+  const res = await fetch(`${NOWPAYMENTS_API}/invoice`, {
     method: 'POST',
     headers: {
       'x-api-key': getApiKey(),
