@@ -1,8 +1,12 @@
 const crypto = require('crypto');
 
-const NOWPAYMENTS_API = 'https://api.nowpayments.io/v1';
-
 function isSandbox() { return process.env.NOWPAYMENTS_SANDBOX === 'true'; }
+
+// Sandbox keys only authenticate against the sandbox host — switch the base URL
+// to match, otherwise a sandbox key hits the prod endpoint and always 401s.
+function apiBase() {
+  return isSandbox() ? 'https://api-sandbox.nowpayments.io/v1' : 'https://api.nowpayments.io/v1';
+}
 
 function getApiKey() {
   const key = process.env.NOWPAYMENTS_API_KEY;
@@ -22,7 +26,7 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
     is_fixed_rate: true,
   };
   if (isSandbox() && _case) body.case = _case;
-  const res = await fetch(`${NOWPAYMENTS_API}/invoice`, {
+  const res = await fetch(`${apiBase()}/invoice`, {
     method: 'POST',
     headers: {
       'x-api-key': getApiKey(),
