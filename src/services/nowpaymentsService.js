@@ -38,7 +38,14 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
     const err = await res.text();
     throw new Error(`NowPayments invoice error: ${err}`);
   }
-  return res.json();
+  const data = await res.json();
+  // Sandbox returns invoice_url on the production checkout host, where a sandbox
+  // invoice doesn't exist ("Partner not found"). Repoint it at the sandbox host
+  // so the hosted checkout page can actually load it.
+  if (isSandbox() && typeof data.invoice_url === 'string') {
+    data.invoice_url = data.invoice_url.replace('://nowpayments.io', '://sandbox.nowpayments.io');
+  }
+  return data;
 }
 
 function verifyIPN(body, signature) {
