@@ -18,9 +18,10 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
   const body = {
     price_amount,
     price_currency: 'usd',
-    // Default buyers to USDT on TRON (TRC20) instead of BTC — matches the Binance
-    // payout wallet and avoids volatile conversion. Override via env if needed.
-    pay_currency: process.env.NOWPAYMENTS_PAY_CURRENCY || 'usdttrc20',
+    // Leave pay_currency UNSET by default so the hosted checkout shows the full
+    // method picker (all cryptos + the card/fiat on-ramp). Setting a fixed currency
+    // (via NOWPAYMENTS_PAY_CURRENCY) locks the checkout to that coin and hides card.
+    ...(process.env.NOWPAYMENTS_PAY_CURRENCY ? { pay_currency: process.env.NOWPAYMENTS_PAY_CURRENCY } : {}),
     ipn_callback_url,
     order_id,
     order_description,
