@@ -37,4 +37,12 @@ module.exports = {
   RECLAIMS_BEFORE_BAN: 3,
   TRUST_FLOOR_BAN: 25,
   TRUST_PENALTY: 15,
+
+  // NowPayments price tiers
+  PRICE_TIERS: [
+    { usd: 5,  coins: 1000,  bonus_pct: 0  },
+    { usd: 10, coins: 2200,  bonus_pct: 10 },
+    { usd: 25, coins: 6000,  bonus_pct: 20 },
+    { usd: 50, coins: 13000, bonus_pct: 30 },
+  ],
 };

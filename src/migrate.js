@@ -35,6 +35,30 @@ async function runMigration() {
       WHERE c.youtube_channel_id = u.youtube_channel_id
         AND COALESCE(u.subscriber_count, 0) = 0 AND COALESCE(c.subscriber_count, 0) > 0`);
   } catch (e) { console.error('[migrate] users.subscriber_count:', e.message); }
+
+  // 4. Add 'purchase' to transactions type check for NowPayments.
+  try {
+    await pool.query(`ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_type_check`);
+    await pool.query(
+      `ALTER TABLE transactions ADD CONSTRAINT transactions_type_check
+       CHECK (type IN ('earned', 'spent', 'bonus', 'purchase'))`
+    );
+  } catch (e) { console.error('[migrate] transactions_type_check:', e.message); }
+
+  // 5. Pending payments table for NowPayments invoices.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pending_payments (
+        invoice_id    VARCHAR(255) PRIMARY KEY,
+        order_id      VARCHAR(255) NOT NULL,
+        user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        usd           INTEGER NOT NULL,
+        coins         INTEGER NOT NULL,
+        bonus_pct     INTEGER DEFAULT 0,
+        status        VARCHAR(20) DEFAULT 'pending',
+        created_at    TIMESTAMP DEFAULT NOW()
+      )`);
+  } catch (e) { console.error('[migrate] pending_payments:', e.message); }
 }
 
 module.exports = { runMigration };

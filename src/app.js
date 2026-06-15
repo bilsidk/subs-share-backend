@@ -8,6 +8,7 @@ const userRoutes        = require('./routes/users');
 const channelRoutes     = require('./routes/channels');
 const taskRoutes        = require('./routes/tasks');
 const transactionRoutes = require('./routes/transactions');
+const paymentRoutes     = require('./routes/payments');
 const adminRoutes       = require('./routes/admin');
 const { errorHandler }  = require('./middleware/errorHandler');
 const { initOnBoot }    = require('./services/settingsService');
@@ -96,6 +97,7 @@ app.post('/tasks/:id/complete', verifyLimiter);
 app.post('/tasks',              campaignLimiter);
 app.use('/tasks',                        taskRoutes);
 app.use('/transactions',                 transactionRoutes);
+app.use('/payments',                     paymentRoutes);
 app.use('/admin',        adminLimiter,   adminRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
