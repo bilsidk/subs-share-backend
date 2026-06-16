@@ -213,12 +213,16 @@ const verifyTask = async (req, res, next) => {
     } catch (e) { return res.status(e.status||403).json({ error: e.message, code: e.code }); }
 
     if (!started_at) return res.status(400).json({ error: 'started_at required' });
+    const startedMs = new Date(started_at).getTime();
+    if (isNaN(startedMs)) return res.status(400).json({ error: 'Invalid started_at' });
 
     const appSettings = await settings.getSettings();
     const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
-    const elapsed = (Date.now() - started_at) / 1000;
+    const elapsed = (Date.now() - startedMs) / 1000;
     if (elapsed < delaySeconds)
       return res.status(400).json({ error: `Wait ${Math.ceil(delaySeconds - elapsed)} more seconds`, remaining: Math.ceil(delaySeconds - elapsed) });
+    if (elapsed > delaySeconds + 60)
+      return res.status(400).json({ error: 'started_at too far in the past — open the task again' });
 
     const taskRes = await pool.query(
       `SELECT t.*, c.user_id AS owner_id, c.youtube_channel_id AS target_channel_id

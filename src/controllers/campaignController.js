@@ -1,5 +1,6 @@
 const pool = require('../db/pool');
 const cfg  = require('../config');
+const settings = require('../services/settingsService');
 
 async function assertOwnsTask(taskId, userId) {
   const r = await pool.query(
@@ -47,7 +48,17 @@ const cancelCampaign = async (req, res, next) => {
       return res.status(400).json({ error: `Campaign is already ${task.status}` });
 
     const isAppOwner = task.role==='owner' || task.email?.toLowerCase()===cfg.OWNER_EMAIL;
-    const slotCost = cfg.SLOT_COSTS[task.task_type] || 0;
+    const appSettings = await settings.getSettings();
+    const margin = appSettings.house_margin ?? 3;
+    const rewardMap = {
+      subscribe:       appSettings.coins_subscribe,
+      like:            appSettings.coins_like,
+      like_comment:    appSettings.coins_like_comment,
+      subscribe_like:  appSettings.coins_subscribe_like,
+      watch:           appSettings.coins_watch,
+    };
+    const earnerReward = rewardMap[task.task_type] || cfg.REWARDS[task.task_type] || 0;
+    const slotCost = earnerReward + margin;
     const refundCoins = isAppOwner ? 0 : task.remaining_slots * slotCost;
 
     await client.query('BEGIN');

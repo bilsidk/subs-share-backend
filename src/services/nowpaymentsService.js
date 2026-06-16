@@ -1,12 +1,6 @@
 const crypto = require('crypto');
 
-function isSandbox() { return process.env.NOWPAYMENTS_SANDBOX === 'true'; }
-
-// Sandbox keys only authenticate against the sandbox host — switch the base URL
-// to match, otherwise a sandbox key hits the prod endpoint and always 401s.
-function apiBase() {
-  return isSandbox() ? 'https://api-sandbox.nowpayments.io/v1' : 'https://api.nowpayments.io/v1';
-}
+const API_BASE = 'https://api.nowpayments.io/v1';
 
 function getApiKey() {
   const key = process.env.NOWPAYMENTS_API_KEY;
@@ -29,7 +23,7 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
     cancel_url,
     is_fixed_rate: true,
   };
-  const res = await fetch(`${apiBase()}/invoice`, {
+  const res = await fetch(`${API_BASE}/invoice`, {
     method: 'POST',
     headers: {
       'x-api-key': getApiKey(),
@@ -41,14 +35,7 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
     const err = await res.text();
     throw new Error(`NowPayments invoice error: ${err}`);
   }
-  const data = await res.json();
-  // Sandbox returns invoice_url on the production checkout host, where a sandbox
-  // invoice doesn't exist ("Partner not found"). Repoint it at the sandbox host
-  // so the hosted checkout page can actually load it.
-  if (isSandbox() && typeof data.invoice_url === 'string') {
-    data.invoice_url = data.invoice_url.replace('://nowpayments.io', '://sandbox.nowpayments.io');
-  }
-  return data;
+  return res.json();
 }
 
 function verifyIPN(body, signature) {

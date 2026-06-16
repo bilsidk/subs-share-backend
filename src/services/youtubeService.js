@@ -23,19 +23,23 @@ async function getYouTubeClient(userId) {
     refresh_token: youtube_refresh_token,
     expiry_date: youtube_token_expiry ? new Date(youtube_token_expiry).getTime() : null,
   });
-  oauth2.on('tokens', async (tokens) => {
-    try {
-      await pool.query(
-        `UPDATE users SET
-           youtube_access_token  = COALESCE($1, youtube_access_token),
-           youtube_refresh_token = COALESCE($2, youtube_refresh_token),
-           youtube_token_expiry  = COALESCE($3, youtube_token_expiry)
-         WHERE id=$4`,
-        [tokens.access_token, tokens.refresh_token || null,
-         tokens.expiry_date ? new Date(tokens.expiry_date) : null, userId]
-      );
-    } catch (e) { console.error('Token persist error:', e.message); }
-  });
+  // Only attach the token handler once per userId to avoid duplicates on concurrent calls
+  if (!oauth2._tokenHandlerAttached) {
+    oauth2._tokenHandlerAttached = true;
+    oauth2.on('tokens', async (tokens) => {
+      try {
+        await pool.query(
+          `UPDATE users SET
+             youtube_access_token  = COALESCE($1, youtube_access_token),
+             youtube_refresh_token = COALESCE($2, youtube_refresh_token),
+             youtube_token_expiry  = COALESCE($3, youtube_token_expiry)
+           WHERE id=$4`,
+          [tokens.access_token, tokens.refresh_token || null,
+           tokens.expiry_date ? new Date(tokens.expiry_date) : null, userId]
+        );
+      } catch (e) { console.error('Token persist error:', e.message); }
+    });
+  }
   return google.youtube({ version: 'v3', auth: oauth2 });
 }
 

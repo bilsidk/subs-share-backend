@@ -55,24 +55,6 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Task verification — 30 per 15 min per IP (anti-bot)
-const verifyLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  message: { error: 'Too many verification attempts, please slow down.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// Campaign creation — 20 per hour per IP
-const campaignLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 20,
-  message: { error: 'Too many campaigns created, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
 // Admin — 60 per 15 min per IP
 const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -90,11 +72,8 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().
 app.use('/auth',         authLimiter,    authRoutes);
 app.use('/users',                        userRoutes);
 app.use('/channels',                     channelRoutes);
-// verifyLimiter applies only to verify/complete endpoints
-// campaignLimiter applies only to POST /tasks (campaign creation)
-app.post('/tasks/:id/verify',   verifyLimiter);
-app.post('/tasks/:id/complete', verifyLimiter);
-app.post('/tasks',              campaignLimiter);
+// Limiters for verify/complete/campaign-creation live inside routes/tasks.js
+// so they are part of the normal middleware chain, not standalone app.post routes.
 app.use('/tasks',                        taskRoutes);
 app.use('/transactions',                 transactionRoutes);
 app.use('/payments',                     paymentRoutes);
