@@ -212,16 +212,29 @@ const verifyTask = async (req, res, next) => {
       await antiCheat.assertDeviceOk(req.userId, device_id);
     } catch (e) { return res.status(e.status||403).json({ error: e.message, code: e.code }); }
 
-    if (!started_at) return res.status(400).json({ error: 'started_at required' });
-    const startedMs = new Date(started_at).getTime();
-    if (isNaN(startedMs)) return res.status(400).json({ error: 'Invalid started_at' });
-
     const appSettings = await settings.getSettings();
     const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
+
+    // Prefer the server-stamped start (tamper-proof). Fall back to the client's
+    // started_at only for older app builds that don't call /tasks/:id/start yet —
+    // with strict plausibility checks so a forged timestamp can't skip the wait.
+    const startRow = await pool.query('SELECT started_at FROM task_starts WHERE user_id=$1 AND task_id=$2', [req.userId, taskId]);
+    let startedMs;
+    const serverStamped = startRow.rows.length > 0;
+    if (serverStamped) {
+      startedMs = new Date(startRow.rows[0].started_at).getTime();
+    } else {
+      if (!started_at) return res.status(400).json({ error: 'started_at required' });
+      startedMs = new Date(started_at).getTime();
+      if (isNaN(startedMs)) return res.status(400).json({ error: 'Invalid started_at' });
+      if (startedMs > Date.now() + 5000) return res.status(400).json({ error: 'Invalid started_at' });
+    }
     const elapsed = (Date.now() - startedMs) / 1000;
     if (elapsed < delaySeconds)
       return res.status(400).json({ error: `Wait ${Math.ceil(delaySeconds - elapsed)} more seconds`, remaining: Math.ceil(delaySeconds - elapsed) });
-    if (elapsed > delaySeconds + 60)
+    // The "stale start" guard only applies to the forgeable client fallback; a
+    // server-stamped start is trusted even if the user left the task open a while.
+    if (!serverStamped && elapsed > delaySeconds + 120)
       return res.status(400).json({ error: 'started_at too far in the past — open the task again' });
 
     const taskRes = await pool.query(
@@ -327,6 +340,7 @@ const verifyTask = async (req, res, next) => {
 
     await antiCheat.stampTask(req.userId);
     if (device_id) await antiCheat.registerDevice(req.userId, device_id);
+    pool.query('DELETE FROM task_starts WHERE user_id=$1 AND task_id=$2', [req.userId, taskId]).catch(() => {});
 
     const bal = await pool.query('SELECT coins FROM users WHERE id=$1', [req.userId]);
     res.json({
@@ -363,4 +377,19 @@ const getMyTasks = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getAvailableTasks, createTask, verifyTask, getMyTasks };
+// POST /tasks/:id/start — stamp the moment the user opened a task, server-side,
+// so the verify delay can't be skipped with a forged client started_at.
+const startTask = async (req, res, next) => {
+  try {
+    const taskId = parseInt(req.params.id, 10);
+    if (!taskId) return res.status(400).json({ error: 'Invalid task id' });
+    await pool.query(
+      `INSERT INTO task_starts (user_id, task_id, started_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id, task_id) DO UPDATE SET started_at = NOW()`,
+      [req.userId, taskId]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+};
+
+module.exports = { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask };

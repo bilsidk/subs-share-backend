@@ -59,6 +59,18 @@ async function runMigration() {
         created_at    TIMESTAMP DEFAULT NOW()
       )`);
   } catch (e) { console.error('[migrate] pending_payments:', e.message); }
+
+  // 6. Server-stamped task starts — so the verify delay is measured from a time
+  //    the server controls, not a client-supplied (forgeable) started_at.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS task_starts (
+        user_id    INTEGER NOT NULL,
+        task_id    INTEGER NOT NULL,
+        started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, task_id)
+      )`);
+  } catch (e) { console.error('[migrate] task_starts:', e.message); }
 }
 
 module.exports = { runMigration };

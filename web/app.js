@@ -58,6 +58,7 @@ const api = {
   tasks: (type) => req('GET', '/tasks' + (type ? '?type=' + encodeURIComponent(type) : '')),
   myTasks: () => req('GET', '/tasks/my'),
   createTask: (d) => req('POST', '/tasks', d),
+  start: (id) => req('POST', `/tasks/${id}/start`).catch(() => {}), // server-stamps the start time
   verify: (id, startedAt) => req('POST', `/tasks/${id}/verify`, { started_at: startedAt, device_id: deviceId() }),
   pause: (id) => req('PATCH', `/tasks/${id}/pause`),
   resume: (id) => req('PATCH', `/tasks/${id}/resume`),
@@ -207,7 +208,8 @@ function modalOpenYouTube() {
   if (!url) { m.error = 'This campaign has an invalid link — try another task.'; render(); return; }
   window.open(url, '_blank', 'noopener');
   if (m.status === 'idle') {
-    m.startedAt = Date.now();
+    api.start(m.task.id);            // server records the real start time
+    m.startedAt = Date.now();        // kept as fallback for the delay UI
     m.status = 'countdown'; m.countdown = COMPLETION_DELAY;
     countdownTimer = setInterval(() => {
       if (!S.modal) return clearInterval(countdownTimer);

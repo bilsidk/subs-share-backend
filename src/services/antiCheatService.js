@@ -72,7 +72,7 @@ async function assertDeviceOk(userId, deviceId) {
     'SELECT COUNT(DISTINCT user_id) AS n FROM device_accounts WHERE device_id = $1',
     [deviceId]
   );
-  if (parseInt(r.rows[0].n, 10) > MAX_ACCOUNTS_PER_DEVICE) {
+  if (parseInt(r.rows[0].n, 10) >= MAX_ACCOUNTS_PER_DEVICE) {
     throw cheatError('Too many accounts detected on this device.', 'DEVICE_FARM', 403);
   }
 }
