@@ -1,6 +1,7 @@
 const pool = require('../db/pool');
 const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
-const { MIN_PURCHASE_USD, calcPurchase } = require('../config');
+const { MIN_PURCHASE_USD, calcPurchase, REWARDS, WATCH_COST_PER_EXTRA_MIN, WATCH_REWARD_PER_EXTRA_MIN, COMMENT_BONUS } = require('../config');
+const settings = require('../services/settingsService');
 
 // Only let the client choose the post-payment return origin from a known list,
 // so the success/cancel redirect can't be turned into an open redirect.
@@ -16,7 +17,28 @@ function resolveReturnBase(url) {
 }
 
 async function getTiers(req, res) {
-  res.json({ min_usd: MIN_PURCHASE_USD, rate: 200 });
+  const s = await settings.getSettings();
+  res.json({
+    min_usd: MIN_PURCHASE_USD,
+    rate: 200,
+    slot_costs: {
+      subscribe:      (s.coins_subscribe      ?? 12) + (s.house_margin ?? 3),
+      like:           (s.coins_like           ?? 6)  + (s.house_margin ?? 3),
+      like_comment:   (s.coins_like_comment   ?? 10) + (s.house_margin ?? 3),
+      subscribe_like: (s.coins_subscribe_like ?? 17) + (s.house_margin ?? 3),
+      watch:          (s.coins_watch          ?? 4)  + (s.house_margin ?? 3),
+    },
+    reward_per_type: {
+      subscribe:      s.coins_subscribe      ?? 12,
+      like:           s.coins_like           ?? 6,
+      like_comment:   s.coins_like_comment   ?? 10,
+      subscribe_like: s.coins_subscribe_like ?? 17,
+      watch:          s.coins_watch          ?? 4,
+    },
+    house_margin: s.house_margin ?? 3,
+    watch_extra_min_cost: WATCH_COST_PER_EXTRA_MIN,
+    watch_extra_min_reward: WATCH_REWARD_PER_EXTRA_MIN,
+  });
 }
 
 async function createCheckout(req, res, next) {
@@ -32,7 +54,7 @@ async function createCheckout(req, res, next) {
     const bonus = Math.floor(tier.coins * tier.bonus_pct / 100);
     const total_coins = tier.coins + bonus;
 
-    const apiUrl = process.env.API_URL || `https://${req.get('host')}`;
+    const apiUrl = process.env.API_URL;
     const appUrl = resolveReturnBase(req.body.return_url) || process.env.APP_URL || apiUrl;
 
     const invoice = await createInvoice({

@@ -1,6 +1,8 @@
 const { OAuth2Client } = require('google-auth-library');
+const { google } = require('googleapis');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
+const { getSubscriberCount } = require('../services/youtubeService');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -87,7 +89,6 @@ const googleSignIn = async (req, res, next) => {
     // Auto-register YouTube channel
     if (ytAccessToken) {
       try {
-        const { google } = require('googleapis');
         const oauth2Client = new OAuth2Client(
           process.env.GOOGLE_CLIENT_ID,
           process.env.GOOGLE_CLIENT_SECRET
@@ -121,7 +122,6 @@ const googleSignIn = async (req, res, next) => {
           const channelId   = ch.id;
           const channelName = ch.snippet.title;
           const channelUrl  = `https://www.youtube.com/channel/${channelId}`;
-          const { getSubscriberCount } = require('../services/youtubeService');
           const subscriberCount = await getSubscriberCount(channelId);
 
           await pool.query('UPDATE users SET youtube_channel_id=$1, subscriber_count=$2 WHERE id=$3', [channelId, subscriberCount, user.id]);
