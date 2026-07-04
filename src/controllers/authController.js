@@ -70,20 +70,29 @@ const googleSignIn = async (req, res, next) => {
     const isNew = new Date(user.created_at).getTime() > Date.now() - 5000;
 
     if (isNew) {
-      // Welcome bonus only once per Google account — even after delete + re-signup
-      const hist = await pool.query('SELECT bonus_granted FROM account_history WHERE google_id=$1', [google_id]);
-      if (hist.rows[0]?.bonus_granted !== true) {
-        await pool.query(
-          `INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,50,'bonus','tx:welcome_bonus')`,
-          [user.id]
-        );
-        await pool.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [user.id]);
-        await pool.query(
-          `INSERT INTO account_history (google_id, bonus_granted, updated_at) VALUES ($1, TRUE, NOW())
-           ON CONFLICT (google_id) DO UPDATE SET bonus_granted=TRUE, updated_at=NOW()`,
+      // Welcome bonus exactly once per Google account — even after delete + re-signup,
+      // and race-safe against concurrent sign-ins. The account_history row is the gate:
+      // only the request that actually transitions bonus_granted FALSE→TRUE (returns a
+      // row) credits the coins. Concurrent requests block on the row and re-evaluate the
+      // WHERE against the now-TRUE row, so at most one credit ever happens.
+      const bc = await pool.connect();
+      try {
+        await bc.query('BEGIN');
+        const claim = await bc.query(
+          `INSERT INTO account_history (google_id, bonus_granted, updated_at)
+           VALUES ($1, TRUE, NOW())
+           ON CONFLICT (google_id) DO UPDATE SET bonus_granted=TRUE, updated_at=NOW()
+           WHERE account_history.bonus_granted IS DISTINCT FROM TRUE
+           RETURNING google_id`,
           [google_id]
         );
-      }
+        if (claim.rowCount === 1) {
+          await bc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,50,'bonus','tx:welcome_bonus')`, [user.id]);
+          await bc.query('UPDATE users SET coins = coins + 50 WHERE id = $1', [user.id]);
+        }
+        await bc.query('COMMIT');
+      } catch (e) { await bc.query('ROLLBACK'); console.error('[Auth] welcome bonus grant failed:', e.message); }
+      finally { bc.release(); }
     }
 
     // Auto-register YouTube channel

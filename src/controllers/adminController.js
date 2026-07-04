@@ -87,8 +87,10 @@ const setRole = async (req, res, next) => {
     const { email, role } = req.body;
     if (!['premium', 'user'].includes(role))
       return res.status(400).json({ error: "role must be 'premium' or 'user'" });
+    if (typeof email === 'string' && email.toLowerCase() === OWNER_EMAIL)
+      return res.status(400).json({ error: "The owner account's role cannot be changed." });
     const r = await pool.query(
-      `UPDATE users SET role=$1, is_premium=$2 WHERE LOWER(email)=LOWER($3) RETURNING id, email, role`,
+      `UPDATE users SET role=$1, is_premium=$2 WHERE LOWER(email)=LOWER($3) AND COALESCE(role,'user') <> 'owner' RETURNING id, email, role`,
       [role, role === 'premium', email]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
@@ -140,12 +142,16 @@ const banUser = async (req, res, next) => {
       if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
       return res.json({ ok: true, user: r.rows[0] });
     }
+    // Never ban an owner account (configured owner or any role='owner').
+    if (email.toLowerCase() === OWNER_EMAIL)
+      return res.status(400).json({ error: 'The owner account cannot be banned.' });
     const r = await pool.query(
       `UPDATE users SET is_banned=TRUE, ban_reason=$2, banned_at=NOW()
-       WHERE LOWER(email)=LOWER($1) RETURNING id, email, is_banned, ban_reason`,
+       WHERE LOWER(email)=LOWER($1) AND COALESCE(role,'user') <> 'owner'
+       RETURNING id, email, is_banned, ban_reason`,
       [email, reason || 'Banned by admin']
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found or cannot be banned.' });
     res.json({ ok: true, user: r.rows[0] });
   } catch (err) { next(err); }
 };

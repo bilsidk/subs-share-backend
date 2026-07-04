@@ -1,12 +1,10 @@
 const pool = require('../db/pool');
 const settings = require('./settingsService');
-
-const MIN_SECONDS_BETWEEN_TASKS = 20;
-const MAX_TASKS_PER_HOUR = 40;
-const MAX_ACCOUNTS_PER_DEVICE = 3;
-const RECLAIMS_BEFORE_BAN = 3;
-const TRUST_FLOOR_BAN = 25;
-const TRUST_PENALTY = 15;
+const {
+  MIN_SECONDS_BETWEEN_TASKS, MAX_TASKS_PER_HOUR,
+  MAX_ACCOUNTS_PER_DEVICE, RECLAIMS_BEFORE_BAN,
+  TRUST_FLOOR_BAN, TRUST_PENALTY,
+} = require('../config');
 
 function cheatError(message, code, status = 403) {
   const e = new Error(message);
@@ -113,5 +111,4 @@ async function penalizeReclaim(userId) {
 module.exports = {
   assertNotBanned, assertVelocityOk, assertDeviceOk,
   registerDevice, stampTask, penalizeReclaim,
-  MIN_SECONDS_BETWEEN_TASKS, MAX_TASKS_PER_HOUR,
 };

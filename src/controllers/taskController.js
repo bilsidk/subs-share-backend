@@ -24,6 +24,17 @@ function watchPricing(minutes, baseReward, margin) {
   return { reward, slotCost: reward + margin };
 }
 
+// The permanent "already earned" ledger keys implied by a completed task. A user
+// may be paid at most once per key, across all campaigns, forever.
+function earnedKeysFor(task) {
+  const keys = [];
+  const ch = task.target_channel_id, vid = task.target_video_id;
+  if ((task.task_type === 'subscribe' || task.task_type === 'subscribe_like') && ch)  keys.push('sub:' + ch);
+  if ((task.task_type === 'like' || task.task_type === 'like_comment' || task.task_type === 'subscribe_like') && vid) keys.push('like:' + vid);
+  if (task.task_type === 'watch' && vid) keys.push('watch:' + vid);
+  return keys;
+}
+
 // GET /tasks
 const getAvailableTasks = async (req, res, next) => {
   try {
@@ -46,7 +57,20 @@ const getAvailableTasks = async (req, res, next) => {
        JOIN channels c ON c.id=t.channel_id
        JOIN users u    ON u.id=c.user_id
        LEFT JOIN completions co ON co.task_id=t.id AND co.user_id=$1
-       WHERE t.status='active' AND t.remaining_slots>0 AND c.user_id!=$1 AND co.id IS NULL ${typeFilter}
+       WHERE t.status='active' AND t.remaining_slots>0 AND c.user_id!=$1 AND co.id IS NULL
+         -- Hide targets this user has ALREADY earned for (any past campaign), so a
+         -- re-created campaign on a channel/video they already actioned can't re-pay.
+         AND NOT EXISTS (
+           SELECT 1 FROM earned_targets et WHERE et.user_id=$1 AND et.target_key = ANY(
+             CASE t.task_type
+               WHEN 'subscribe'      THEN ARRAY['sub:'||c.youtube_channel_id]
+               WHEN 'subscribe_like' THEN ARRAY['sub:'||c.youtube_channel_id, 'like:'||COALESCE(t.target_video_id,'')]
+               WHEN 'like'           THEN ARRAY['like:'||COALESCE(t.target_video_id,'')]
+               WHEN 'like_comment'   THEN ARRAY['like:'||COALESCE(t.target_video_id,'')]
+               WHEN 'watch'          THEN ARRAY['watch:'||COALESCE(t.target_video_id,'')]
+               ELSE ARRAY[]::text[]
+             END)
+         ) ${typeFilter}
        ORDER BY tier ASC, progress_ratio ASC, t.created_at DESC LIMIT 80`,
       params
     );
@@ -176,11 +200,11 @@ const createTask = async (req, res, next) => {
 
     const taskRes = await client.query(
       `INSERT INTO tasks (channel_id,task_type,reward,remaining_slots,total_slots,
-                          target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier)
-       VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9) RETURNING *`,
+                          target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier,slot_cost)
+       VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [effectiveChannelId, task_type, taskReward, slots,
        target_video_id, target_video_url||null,
-       watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier]
+       watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier, slotCost]
     );
 
     // Structured transaction key — frontend translates this
@@ -204,7 +228,12 @@ const verifyTask = async (req, res, next) => {
   const dbc = await pool.connect();
   try {
     const taskId = parseInt(req.params.id, 10);
-    const { started_at, device_id } = req.body;
+    const { device_id } = req.body;
+
+    // A device signal is mandatory for earning — without it the per-device
+    // multi-account cap can't be enforced (it used to silently no-op).
+    if (!device_id || typeof device_id !== 'string' || device_id.length < 6)
+      return res.status(400).json({ error: 'Device identification required. Please update the app.', code: 'DEVICE_REQUIRED' });
 
     try {
       await antiCheat.assertNotBanned(req.userId);
@@ -215,27 +244,26 @@ const verifyTask = async (req, res, next) => {
     const appSettings = await settings.getSettings();
     const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
 
-    // Prefer the server-stamped start (tamper-proof). Fall back to the client's
-    // started_at only for older app builds that don't call /tasks/:id/start yet —
-    // with strict plausibility checks so a forged timestamp can't skip the wait.
+    // The completion delay is measured ONLY from the server-stamped start
+    // (POST /tasks/:id/start). The old client-supplied started_at fallback is gone
+    // — it let a forged timestamp skip the wait entirely.
     const startRow = await pool.query('SELECT started_at FROM task_starts WHERE user_id=$1 AND task_id=$2', [req.userId, taskId]);
-    let startedMs;
-    const serverStamped = startRow.rows.length > 0;
-    if (serverStamped) {
-      startedMs = new Date(startRow.rows[0].started_at).getTime();
-    } else {
-      if (!started_at) return res.status(400).json({ error: 'started_at required' });
-      startedMs = new Date(started_at).getTime();
-      if (isNaN(startedMs)) return res.status(400).json({ error: 'Invalid started_at' });
-      if (startedMs > Date.now() + 5000) return res.status(400).json({ error: 'Invalid started_at' });
+    if (!startRow.rows.length) {
+      // No server-stamped start yet (e.g. the app's fire-and-forget /start was
+      // dropped). Stamp it NOW and make the user wait the full delay measured from
+      // this server time — keeps the anti-bypass guarantee without hard-failing an
+      // already-published client that didn't reach /start.
+      await pool.query(
+        `INSERT INTO task_starts (user_id, task_id, started_at) VALUES ($1,$2,NOW())
+         ON CONFLICT (user_id, task_id) DO NOTHING`,
+        [req.userId, taskId]
+      );
+      return res.status(400).json({ error: `Wait ${delaySeconds} more seconds`, remaining: delaySeconds, code: 'NOT_STARTED' });
     }
+    const startedMs = new Date(startRow.rows[0].started_at).getTime();
     const elapsed = (Date.now() - startedMs) / 1000;
     if (elapsed < delaySeconds)
       return res.status(400).json({ error: `Wait ${Math.ceil(delaySeconds - elapsed)} more seconds`, remaining: Math.ceil(delaySeconds - elapsed) });
-    // The "stale start" guard only applies to the forgeable client fallback; a
-    // server-stamped start is trusted even if the user left the task open a while.
-    if (!serverStamped && elapsed > delaySeconds + 120)
-      return res.status(400).json({ error: 'started_at too far in the past — open the task again' });
 
     const taskRes = await pool.query(
       `SELECT t.*, c.user_id AS owner_id, c.youtube_channel_id AS target_channel_id
@@ -251,8 +279,26 @@ const verifyTask = async (req, res, next) => {
       return res.status(409).json({ error: 'Campaign no longer available', code: 'CAMPAIGN_UNAVAILABLE' });
     if (task.owner_id === req.userId) return res.status(403).json({ error: 'Cannot complete your own campaign' });
 
+    // Watch tasks can't be verified against any YouTube API, so bound abuse with a
+    // per-user daily cap (the earned-target ledger already blocks re-earning the
+    // same video).
+    if (task.task_type === 'watch') {
+      const wc = await pool.query(
+        `SELECT COUNT(*) AS n FROM completions WHERE user_id=$1 AND task_type='watch' AND completed_at > NOW()::date`,
+        [req.userId]
+      );
+      if (parseInt(wc.rows[0].n, 10) >= cfg.MAX_WATCH_PER_DAY)
+        return res.status(429).json({ error: `Daily watch limit reached (${cfg.MAX_WATCH_PER_DAY}). Come back tomorrow.`, code: 'WATCH_DAILY_LIMIT' });
+    }
+
+    // Fast pre-checks (authoritative enforcement is inside the transaction below).
+    const targetKeys = earnedKeysFor(task);
     const dup = await pool.query('SELECT id FROM completions WHERE task_id=$1 AND user_id=$2', [taskId, req.userId]);
-    if (dup.rows.length) return res.status(409).json({ error: 'Already completed' });
+    if (dup.rows.length) return res.status(409).json({ error: 'Already completed', code: 'ALREADY_COMPLETED' });
+    if (targetKeys.length) {
+      const et = await pool.query('SELECT 1 FROM earned_targets WHERE user_id=$1 AND target_key = ANY($2) LIMIT 1', [req.userId, targetKeys]);
+      if (et.rows.length) return res.status(409).json({ error: 'You already earned coins for this channel or video.', code: 'ALREADY_EARNED' });
+    }
 
     const mode = await settings.getMode();
     const degraded = mode.mode === 'degraded';
@@ -312,14 +358,40 @@ const verifyTask = async (req, res, next) => {
       return res.status(409).json({ error: 'Someone just took the last slot — try another task!', code: 'CAMPAIGN_FULL' });
     }
 
-    await dbc.query(
+    // Authoritative once-per-task guard, backed by the UNIQUE(task_id,user_id)
+    // index. If a concurrent request already inserted the completion, this does
+    // nothing and we bail — no double-credit possible under a slot race.
+    const compIns = await dbc.query(
       `INSERT INTO completions (task_id,user_id,verify_method,verify_status,coins_awarded,bonus_coins,
               comment_verified,last_audit_at,target_channel_id,target_video_id,task_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9,$10)
+       ON CONFLICT (task_id,user_id) DO NOTHING
+       RETURNING id`,
       [taskId, req.userId, verifyMethod, verifyMethod==='api' ? 'verified' : 'pending',
        totalCoins, bonusCoins, commentVerified,
        task.target_channel_id, task.target_video_id, task.task_type]
     );
+    if (!compIns.rows.length) {
+      await dbc.query('ROLLBACK');
+      return res.status(409).json({ error: 'Already completed', code: 'ALREADY_COMPLETED' });
+    }
+
+    // Authoritative once-per-target guard. Every applicable key must be NEWLY
+    // inserted; if any already existed (a different campaign on the same channel/
+    // video, or a concurrent request) the user was already paid for it — undo all.
+    if (targetKeys.length) {
+      const etIns = await dbc.query(
+        `INSERT INTO earned_targets (user_id, target_key)
+         SELECT $1, k FROM unnest($2::text[]) AS k
+         ON CONFLICT DO NOTHING RETURNING target_key`,
+        [req.userId, targetKeys]
+      );
+      if (etIns.rows.length !== targetKeys.length) {
+        await dbc.query('ROLLBACK');
+        return res.status(409).json({ error: 'You already earned coins for this channel or video.', code: 'ALREADY_EARNED' });
+      }
+    }
+
     await dbc.query(
       `UPDATE tasks SET remaining_slots=remaining_slots-1,
               status=CASE WHEN remaining_slots-1<=0 THEN 'completed' ELSE status END WHERE id=$1`,

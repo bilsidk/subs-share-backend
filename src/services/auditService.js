@@ -30,6 +30,15 @@ async function reclaim(c) {
     await dbc.query(`UPDATE completions SET verify_status='reclaimed', last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE WHERE id=$1`, [c.id]);
     await dbc.query('UPDATE users SET coins=GREATEST(0,coins-$1) WHERE id=$2', [c.coins_awarded, c.user_id]);
     await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`, [c.user_id, c.coins_awarded, `tx:coins_reclaimed|type:${c.task_type}`]);
+    // Release the earned-target ledger entries for this completion. Otherwise a
+    // reclaim (including a false-positive from a transient API blip) would
+    // permanently bar the user from ever legitimately earning that channel/video
+    // again — the feed hides it and the verify-time ledger insert would reject it.
+    const relKeys = [];
+    if ((c.task_type === 'subscribe' || c.task_type === 'subscribe_like') && c.target_channel_id) relKeys.push('sub:' + c.target_channel_id);
+    if ((c.task_type === 'like' || c.task_type === 'like_comment' || c.task_type === 'subscribe_like') && c.target_video_id) relKeys.push('like:' + c.target_video_id);
+    if (c.task_type === 'watch' && c.target_video_id) relKeys.push('watch:' + c.target_video_id);
+    if (relKeys.length) await dbc.query('DELETE FROM earned_targets WHERE user_id=$1 AND target_key = ANY($2)', [c.user_id, relKeys]);
     await dbc.query('COMMIT');
   } catch (e) { await dbc.query('ROLLBACK'); console.error('[AUDIT] reclaim failed', c.id, e.message); }
   finally { dbc.release(); }
@@ -41,7 +50,8 @@ async function runPass(quick) {
   const due = await pool.query(
     `SELECT id, user_id, task_type, target_channel_id, target_video_id, coins_awarded
      FROM completions
-     WHERE verify_method='api' AND verify_status='verified' AND audit_count<$1
+     WHERE ((verify_method='api' AND verify_status='verified') OR verify_status='pending')
+       AND audit_count<$1
        AND ($2=TRUE AND quick_audited=FALSE OR $2=FALSE)
        AND completed_at < NOW()-($3||' hours')::interval
        AND (last_audit_at IS NULL OR last_audit_at < NOW()-($4||' hours')::interval)
@@ -59,7 +69,11 @@ async function runPass(quick) {
       continue;
     }
     if (valid) {
-      await pool.query('UPDATE completions SET last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE WHERE id=$1', [c.id]);
+      // A pending (honor-mode) completion that now checks out is promoted to
+      // verified so it stops being re-queued; watch/honor rows that can't be
+      // API-verified are treated as valid here (bounded by the daily watch cap).
+      await pool.query(`UPDATE completions SET last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE,
+                        verify_status=CASE WHEN verify_status='pending' THEN 'verified' ELSE verify_status END WHERE id=$1`, [c.id]);
     } else {
       reclaimed++;
       await reclaim(c);

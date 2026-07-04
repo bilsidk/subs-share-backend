@@ -48,6 +48,9 @@ const cancelCampaign = async (req, res, next) => {
       return res.status(400).json({ error: `Campaign is already ${task.status}` });
 
     const isAppOwner = task.role==='owner' || task.email?.toLowerCase()===cfg.OWNER_EMAIL;
+    // Refund exactly what was charged per slot at creation time (stored on the
+    // task). Never recompute from live settings — a price change between create
+    // and cancel would otherwise refund more (or less) than was actually paid.
     const appSettings = await settings.getSettings();
     const margin = appSettings.house_margin ?? 3;
     const rewardMap = {
@@ -57,8 +60,10 @@ const cancelCampaign = async (req, res, next) => {
       subscribe_like:  appSettings.coins_subscribe_like,
       watch:           appSettings.coins_watch,
     };
-    const earnerReward = rewardMap[task.task_type] || cfg.REWARDS[task.task_type] || 0;
-    const slotCost = earnerReward + margin;
+    // Fall back to a recomputed cost only for legacy rows created before slot_cost
+    // existed (the migration backfills these, so this is belt-and-suspenders).
+    const legacySlotCost = (rewardMap[task.task_type] || cfg.REWARDS[task.task_type] || 0) + margin;
+    const slotCost = Number.isFinite(task.slot_cost) && task.slot_cost != null ? task.slot_cost : legacySlotCost;
     const refundCoins = isAppOwner ? 0 : task.remaining_slots * slotCost;
 
     await client.query('BEGIN');

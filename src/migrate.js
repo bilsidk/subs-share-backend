@@ -71,6 +71,53 @@ async function runMigration() {
         PRIMARY KEY (user_id, task_id)
       )`);
   } catch (e) { console.error('[migrate] task_starts:', e.message); }
+
+  // 7. Hard uniqueness on completions — a user can complete a given task at most
+  //    once. Without this, concurrent /verify requests could each pass the
+  //    (non-transactional) dup SELECT and double-credit. First collapse any
+  //    pre-existing duplicates (keep the earliest row), then add the index.
+  try {
+    await pool.query(`
+      DELETE FROM completions a USING completions b
+      WHERE a.task_id = b.task_id AND a.user_id = b.user_id AND a.id > b.id`);
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS completions_task_user_uidx
+      ON completions (task_id, user_id)`);
+  } catch (e) { console.error('[migrate] completions unique index:', e.message); }
+
+  // 8. Record the slot cost actually charged at campaign-creation time, so a
+  //    cancel refunds exactly what was paid — not a price recomputed from live
+  //    settings (which could refund more than was charged).
+  try {
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS slot_cost INTEGER`);
+    // Best-effort backfill for existing rows: reward + default house margin (3).
+    await pool.query(`UPDATE tasks SET slot_cost = reward + 3 WHERE slot_cost IS NULL`);
+  } catch (e) { console.error('[migrate] tasks.slot_cost:', e.message); }
+
+  // 9. Permanent per-user "already earned for this target" ledger. A user can be
+  //    paid at most once for subscribing to a given channel / liking / watching a
+  //    given video — across ALL campaigns, forever. Closes the "re-created
+  //    campaign re-pays an already-subscribed user" farm. Backfilled from history.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS earned_targets (
+        user_id    INTEGER NOT NULL,
+        target_key TEXT    NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, target_key)
+      )`);
+    await pool.query(`
+      INSERT INTO earned_targets (user_id, target_key)
+      SELECT user_id, 'sub:'||target_channel_id FROM completions
+        WHERE task_type IN ('subscribe','subscribe_like') AND target_channel_id IS NOT NULL
+      UNION
+      SELECT user_id, 'like:'||target_video_id FROM completions
+        WHERE task_type IN ('like','like_comment','subscribe_like') AND target_video_id IS NOT NULL
+      UNION
+      SELECT user_id, 'watch:'||target_video_id FROM completions
+        WHERE task_type = 'watch' AND target_video_id IS NOT NULL
+      ON CONFLICT DO NOTHING`);
+  } catch (e) { console.error('[migrate] earned_targets:', e.message); }
 }
 
 module.exports = { runMigration };

@@ -33,6 +33,9 @@ module.exports = {
 
   MIN_SECONDS_BETWEEN_TASKS: 20,
   MAX_TASKS_PER_HOUR: 40,
+  // Watch tasks can't be verified against a YouTube API, so cap how many a single
+  // user can bank per day to bound honor-system abuse.
+  MAX_WATCH_PER_DAY: 20,
   MAX_ACCOUNTS_PER_DEVICE: 3,
   RECLAIMS_BEFORE_BAN: 3,
   TRUST_FLOOR_BAN: 25,

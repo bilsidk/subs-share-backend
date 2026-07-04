@@ -43,7 +43,10 @@ async function getTiers(req, res) {
 
 async function createCheckout(req, res, next) {
   try {
-    const amount = Number(req.body.amount);
+    // USD is charged and stored as a whole number of dollars (the pending_payments.usd
+    // column is INTEGER), so normalize up front to keep the charge, the credited coins,
+    // and the ledger perfectly consistent — no fractional divergence.
+    const amount = Math.round(Number(req.body.amount));
     if (!Number.isFinite(amount) || amount < MIN_PURCHASE_USD)
       return res.status(400).json({ error: `Minimum purchase is $${MIN_PURCHASE_USD}` });
     if (amount > 100000)
@@ -54,8 +57,8 @@ async function createCheckout(req, res, next) {
     const bonus = Math.floor(tier.coins * tier.bonus_pct / 100);
     const total_coins = tier.coins + bonus;
 
-    const apiUrl = process.env.API_URL;
-    const appUrl = resolveReturnBase(req.body.return_url) || process.env.APP_URL || apiUrl;
+    const apiUrl = process.env.API_URL || `https://${req.get('host')}`;
+    const appUrl = resolveReturnBase(req.body.return_url) || process.env.APP_URL || 'https://app.viralboostnow.com';
 
     const invoice = await createInvoice({
       price_amount: tier.usd,
@@ -77,15 +80,17 @@ async function createCheckout(req, res, next) {
 }
 
 async function handleIPN(req, res) {
-  const signature = req.headers['x-nowpayments-sig'];
-  if (!signature || !verifyIPN(req.body, signature)) {
-    return res.status(403).json({ error: 'Invalid signature' });
-  }
-
-  const { invoice_id, order_id, payment_status, actually_paid } = req.body;
-  if (!invoice_id) return res.status(400).json({ error: 'Missing invoice_id' });
-
   try {
+    // verifyIPN throws if the IPN secret is unset — keep it inside try so a
+    // misconfiguration returns a clean 500 instead of an unhandled rejection.
+    const signature = req.headers['x-nowpayments-sig'];
+    if (!signature || !verifyIPN(req.body, signature)) {
+      return res.status(403).json({ error: 'Invalid signature' });
+    }
+
+    const { invoice_id, order_id, payment_status, actually_paid } = req.body;
+    if (!invoice_id) return res.status(400).json({ error: 'Missing invoice_id' });
+
     const pp = await pool.query('SELECT * FROM pending_payments WHERE invoice_id=$1', [String(invoice_id)]);
     if (!pp.rows.length) return res.status(404).json({ error: 'Invoice not found' });
 

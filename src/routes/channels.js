@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireNotBanned } = require('../middleware/auth');
 const { addChannel, getMyChannels } = require('../controllers/channelController');
-router.post('/', authenticate, addChannel);
+router.post('/', authenticate, requireNotBanned, addChannel);
 router.get('/', authenticate, getMyChannels);
 module.exports = router;

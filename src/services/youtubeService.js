@@ -120,7 +120,7 @@ function parseDuration(iso) {
 async function getSubscriberCount(channelId) {
   if (!channelId) return 0;
   try {
-    const yt = google.youtube({ version: 'v3', auth: process.env.YOUTUBE_API_KEY });
+  const yt = google.youtube({ version: 'v3', auth: process.env.GOOGLE_API_KEY });
     const res = await yt.channels.list({ part: 'statistics', id: channelId });
     const count = res.data.items?.[0]?.statistics?.subscriberCount;
     return count ? parseInt(count, 10) : 0;

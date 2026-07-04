@@ -418,7 +418,14 @@ function t(key, vars) {
   if (val === undefined) val = getNested(T.en, keys);
   if (val === undefined) return key;
   if (typeof val === 'string' && vars) {
-    val = val.replace(/\{\{(\w+)\}\}/g, (_, k) => (vars[k] !== undefined ? vars[k] : ''));
+    // Escape interpolated VALUES (they may originate from other users' campaign
+    // data) while preserving the template's own markup like <br>/<b>. Without
+    // this, a value such as watch_minutes could inject HTML into innerHTML (XSS).
+    val = val.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+      const v = vars[k];
+      if (v === undefined || v === null) return '';
+      return String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    });
   }
   return val;
 }

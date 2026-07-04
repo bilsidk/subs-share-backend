@@ -176,7 +176,9 @@ function priceHTML() {
   const mins = parseInt(C.watchMins, 10) || 1;
   const per = estimateCost(C.type, 1, mins);
   const total = per * slots;
-  return tr('grow.price', { cost: `<b>${total}</b>`, per });
+  // Pass plain values — t() now HTML-escapes interpolated values, so markup in a
+  // value would render as literal tags. (cost/per are integers; nothing to bold.)
+  return tr('grow.price', { cost: total, per });
 }
 function updatePrice() { const el = document.getElementById('pricebox'); if (el) el.innerHTML = priceHTML(); }
 
@@ -196,7 +198,11 @@ async function loadTab(tab) {
 }
 
 // ── verify flow ───────────────────────────────────────────────────────────────
-function openTask(task) {
+function openTask(taskId) {
+  // Look the task up by id rather than trusting a blob serialized into the DOM —
+  // avoids injecting server data into an inline handler attribute.
+  const task = S.tasks.find(t => String(t.id) === String(taskId));
+  if (!task) return;
   S.modal = { task, status: 'idle', countdown: 0, startedAt: null, error: '', message: '' };
   render();
 }
@@ -231,8 +237,30 @@ async function modalVerify() {
     api.me().then(d => { S.user = d; render(); }).catch(() => {});
     S.tasks = S.tasks.filter(t => t.id !== m.task.id);
   } catch (e) {
-    m.status = 'ready';
-    m.error = e.data?.remaining ? tr('modal.waitMore', { s: e.data.remaining }) : e.message;
+    const code = e.data?.code;
+    if (code === 'NOT_STARTED') {
+      // Server hadn't stamped a start yet — it has now. Restart the wait instead of
+      // showing a raw error; the user can claim once the delay elapses.
+      m.startedAt = Date.now();
+      m.status = 'countdown';
+      m.countdown = e.data.remaining || COMPLETION_DELAY;
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownTimer = setInterval(() => {
+        if (!S.modal) return clearInterval(countdownTimer);
+        S.modal.countdown--;
+        if (S.modal.countdown <= 0) { clearInterval(countdownTimer); S.modal.status = 'ready'; }
+        render();
+      }, 1000);
+      m.error = tr('modal.waitMore', { s: m.countdown });
+    } else if (['ALREADY_EARNED', 'ALREADY_COMPLETED', 'CAMPAIGN_FULL', 'CAMPAIGN_PAUSED', 'CAMPAIGN_CANCELLED', 'CAMPAIGN_UNAVAILABLE'].includes(code)) {
+      // No longer claimable — drop it from the feed and close out cleanly.
+      S.tasks = S.tasks.filter(t => t.id !== m.task.id);
+      m.status = 'done';
+      m.message = e.message || 'This task is no longer available.';
+    } else {
+      m.status = 'ready';
+      m.error = e.data?.remaining ? tr('modal.waitMore', { s: e.data.remaining }) : e.message;
+    }
   }
   render();
 }
@@ -414,11 +442,11 @@ function vEarn() {
     `<button class="chip ${S.taskFilter === t ? 'active' : ''}" onclick="setFilter(${t ? `'${t}'` : 'null'})">${t ? taskLabel(t) : tr('earn.all')}</button>`
   ).join('');
   const list = S.tasks.length ? S.tasks.map(t => `
-    <div class="card task" onclick='openTask(${JSON.stringify(t).replace(/'/g, '&#39;')})'>
+    <div class="card task" onclick="openTask(${esc(String(t.id))})">
       <div class="avatar">${t.owner_avatar ? `<img src="${esc(t.owner_avatar)}" alt="" referrerpolicy="no-referrer">` : (TASK_ICON[t.task_type] || '📺')}</div>
       <div class="info">
         <div class="name">${esc(t.channel_name || t.owner_name)}</div>
-        <div class="meta">${taskLabel(t.task_type)}${t.task_type === 'watch' ? ` · ${t.watch_minutes} ${tr('earn.min')}` : ''} · ${t.remaining_slots} ${tr('earn.left')}</div>
+        <div class="meta">${taskLabel(t.task_type)}${t.task_type === 'watch' ? ` · ${esc(t.watch_minutes)} ${tr('earn.min')}` : ''} · ${esc(t.remaining_slots)} ${tr('earn.left')}</div>
       </div>
       <div class="reward">+${t.reward} 🪙</div>
     </div>`).join('')
