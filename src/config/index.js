@@ -41,6 +41,46 @@ module.exports = {
   TRUST_FLOOR_BAN: 25,
   TRUST_PENALTY: 15,
 
+  // Google Play in-app products (consumable coin packs). Product IDs must match
+  // exactly what you create in Play Console. Coin amounts live here so they can be
+  // changed without an app update. ANDROID_PACKAGE is the app's applicationId.
+  ANDROID_PACKAGE: 'com.subsshare',
+  // Each pack: coins = total credited (base + bonus). base/bonus are for display
+  // ("1,400 + 100 bonus"). popular/best drive the badges. Coin totals here must
+  // match the value you advertise for each Play Console product ID.
+  GOOGLE_PLAY_PRODUCTS: {
+    coins_600:   { coins: 600,   base: 600,   bonus: 0 },
+    coins_1500:  { coins: 1500,  base: 1400,  bonus: 100 },
+    coins_3200:  { coins: 3200,  base: 2600,  bonus: 600,  popular: true },
+    coins_7000:  { coins: 7000,  base: 5000,  bonus: 2000 },
+    coins_15000: { coins: 15000, base: 10000, bonus: 5000, best: true },
+  },
+
+  // Custom-amount purchases (web only — Google Play can't do arbitrary amounts).
+  // The user enters the base coins they pay for (200 coins per $1); bonus coins are
+  // added on top per tier. Minimum 600 base coins ($3).
+  COINS_PER_USD: 200,
+  MIN_CUSTOM_COINS: 600,
+  CUSTOM_BONUS_TIERS: [   // [minBaseCoins, bonusPct] — highest matching tier applies
+    [10000, 50],
+    [5000, 40],
+    [2600, 23],
+    [1400, 7],
+    [600, 0],
+  ],
+  // Compute price + bonus for a custom base-coin amount. Returns null if invalid.
+  calcCustomCoins(baseCoins) {
+    const base = Math.floor(Number(baseCoins));
+    if (!Number.isFinite(base) || base < this.MIN_CUSTOM_COINS) return null;
+    if (base > 2000000) return null; // sane upper bound
+    let pct = 0;
+    for (const [min, p] of this.CUSTOM_BONUS_TIERS) { if (base >= min) { pct = p; break; } }
+    const bonus = Math.round(base * pct / 100);
+    const total = base + bonus;
+    const usd = Math.round((base / this.COINS_PER_USD) * 100) / 100; // 2 decimals
+    return { base, bonus, total, bonus_pct: pct, usd };
+  },
+
   // NowPayments price tiers
   MIN_PURCHASE_USD: 20,
   calcPurchase(usd) {

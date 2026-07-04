@@ -118,6 +118,22 @@ async function runMigration() {
         WHERE task_type = 'watch' AND target_video_id IS NOT NULL
       ON CONFLICT DO NOTHING`);
   } catch (e) { console.error('[migrate] earned_targets:', e.message); }
+
+  // 10. Google Play purchases — exactly-once coin crediting for in-app purchases.
+  //     The purchase_token is unique per transaction; the PRIMARY KEY guarantees a
+  //     replayed/retried verify can never double-credit.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS google_purchases (
+        purchase_token TEXT PRIMARY KEY,
+        order_id       TEXT,
+        user_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        product_id     TEXT NOT NULL,
+        coins          INTEGER NOT NULL,
+        status         VARCHAR(20) DEFAULT 'credited',
+        created_at     TIMESTAMP NOT NULL DEFAULT NOW()
+      )`);
+  } catch (e) { console.error('[migrate] google_purchases:', e.message); }
 }
 
 module.exports = { runMigration };

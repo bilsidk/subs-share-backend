@@ -1,5 +1,7 @@
 const pool = require('../db/pool');
+const cfg = require('../config');
 const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
+const googlePlay = require('../services/googlePlayService');
 const { MIN_PURCHASE_USD, calcPurchase, REWARDS, WATCH_COST_PER_EXTRA_MIN, WATCH_REWARD_PER_EXTRA_MIN, COMMENT_BONUS } = require('../config');
 const settings = require('../services/settingsService');
 
@@ -38,6 +40,9 @@ async function getTiers(req, res) {
     house_margin: s.house_margin ?? 3,
     watch_extra_min_cost: WATCH_COST_PER_EXTRA_MIN,
     watch_extra_min_reward: WATCH_REWARD_PER_EXTRA_MIN,
+    // Google Play coin packs: { productId: coins }. The app queries Play for the
+    // localized price of each id and shows the coin amount from here.
+    google_products: cfg.GOOGLE_PLAY_PRODUCTS,
   });
 }
 
@@ -134,4 +139,65 @@ async function handleIPN(req, res) {
   }
 }
 
-module.exports = { getTiers, createCheckout, handleIPN };
+// POST /payments/google/verify  { product_id, purchase_token }
+// Called by the Android app after a Google Play purchase. Verifies the token with
+// Google, credits coins exactly-once, and acknowledges the purchase.
+async function verifyGooglePlay(req, res, next) {
+  const { product_id, purchase_token } = req.body || {};
+  if (!product_id || !purchase_token)
+    return res.status(400).json({ error: 'product_id and purchase_token are required' });
+
+  const product = cfg.GOOGLE_PLAY_PRODUCTS[product_id];
+  if (!product) return res.status(400).json({ error: 'Unknown product', code: 'BAD_PRODUCT' });
+  const coins = product.coins;
+
+  try {
+    // 1) Verify the token with Google (source of truth — never trust the client).
+    let info;
+    try {
+      info = await googlePlay.verifyProductPurchase(product_id, purchase_token);
+    } catch (e) {
+      console.error('[gplay] verify error:', e.message);
+      return res.status(502).json({ error: 'Could not verify purchase right now. Try again.', code: 'VERIFY_RETRY' });
+    }
+    if (info.pending) return res.status(202).json({ pending: true, code: 'PURCHASE_PENDING' });
+    if (!info.purchased) return res.status(400).json({ error: 'Purchase is not valid.', code: 'NOT_PURCHASED' });
+
+    // 2) Exactly-once credit, keyed on the purchase token (unique per transaction).
+    const dbc = await pool.connect();
+    let alreadyCredited = false;
+    try {
+      await dbc.query('BEGIN');
+      const claim = await dbc.query(
+        `INSERT INTO google_purchases (purchase_token, order_id, user_id, product_id, coins)
+         VALUES ($1,$2,$3,$4,$5) ON CONFLICT (purchase_token) DO NOTHING`,
+        [purchase_token, info.orderId, req.userId, product_id, coins]
+      );
+      if (claim.rowCount === 0) {
+        alreadyCredited = true;           // duplicate/retried verify — do not credit again
+        await dbc.query('ROLLBACK');
+      } else {
+        await dbc.query('UPDATE users SET coins = coins + $1 WHERE id = $2', [coins, req.userId]);
+        await dbc.query(
+          `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1,$2,'purchase',$3)`,
+          [req.userId, coins, `tx:purchase|coins:${coins}|product:${product_id}|order:${info.orderId || ''}`]
+        );
+        await dbc.query('COMMIT');
+      }
+    } catch (e) { await dbc.query('ROLLBACK'); throw e; }
+    finally { dbc.release(); }
+
+    // 3) Acknowledge with Google (best-effort; prevents auto-refund after 3 days).
+    googlePlay.acknowledgeProductPurchase(product_id, purchase_token).catch(() => {});
+
+    const bal = await pool.query('SELECT coins FROM users WHERE id=$1', [req.userId]);
+    return res.json({
+      ok: true,
+      already_credited: alreadyCredited,
+      coins_added: alreadyCredited ? 0 : coins,
+      new_balance: bal.rows[0]?.coins ?? null,
+    });
+  } catch (err) { next(err); }
+}
+
+module.exports = { getTiers, createCheckout, handleIPN, verifyGooglePlay };
