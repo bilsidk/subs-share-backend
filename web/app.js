@@ -624,6 +624,7 @@ function vReferral() {
       <p class="hint" style="margin:8px 0 16px">${tr('referral.subtitle', { referrer: referrerBonus, referee: refereeBonus })}</p>
       <div class="hint">${tr('referral.yourCode')}</div>
       <div style="font-size:32px;font-weight:800;color:var(--gold);letter-spacing:6px;margin:6px 0">${esc(code)}</div>
+      ${r.code ? `<div class="hint" style="margin-top:6px;word-break:break-all;opacity:.8">${esc(referralLink(code))}</div>` : ''}
       <button class="btn" style="margin-top:10px" onclick="shareReferral()">${tr('referral.share')}</button>
     </div>
     <div style="display:flex;gap:10px">
@@ -635,13 +636,16 @@ function vReferral() {
   </div>`;
 }
 
+function referralLink(code) { return location.origin + '/?ref=' + encodeURIComponent(code); }
+
 async function shareReferral() {
   const code = S.referral?.code;
   if (!code) return;
-  const msg = tr('referral.shareMessage', { code });
+  const link = referralLink(code);
+  const msg = tr('referral.shareMessage', { code }) + '\n' + link;
   try {
     if (navigator.share) await navigator.share({ text: msg });
-    else { await navigator.clipboard.writeText(code); alert(tr('referral.copied')); }
+    else { await navigator.clipboard.writeText(link); alert(tr('referral.copied')); }
   } catch (_) {}
 }
 
@@ -736,9 +740,13 @@ Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask,
   gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {
+  const params = new URLSearchParams(location.search);
+  // Referral link: ?ref=CODE pre-fills the referral field so the invitee doesn't type.
+  const ref = params.get('ref');
+  if (ref) S.referralCode = ref.trim().toUpperCase().slice(0, 12);
   // NowPayments sends the buyer back to ?payment=success|cancelled after checkout.
-  const pay = new URLSearchParams(location.search).get('payment');
-  if (pay) history.replaceState({}, '', location.pathname); // clean the URL
+  const pay = params.get('payment');
+  if (pay || ref) history.replaceState({}, '', location.pathname); // clean the URL
   if (S.token) {
     try {
       S.user = await api.me();
