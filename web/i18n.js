@@ -24,8 +24,8 @@ const LANGS = {
 
 const T = {
   en: {
-    common: { privacy: 'Privacy', terms: 'Terms', done: 'Done', cancel: 'Cancel', requestFailed: 'Request failed', sessionExpired: 'Session expired — sign in again.' },
-    login: { tagline: 'Earn coins by supporting other creators.<br>Spend them to grow your channel.', continue: 'Continue with Google', signingIn: 'Signing in…', disclaimer: 'We use your Google account to verify YouTube actions.', cancelled: 'Sign-in cancelled.', closed: 'Sign-in was closed.', loading: 'Google sign-in is still loading — try again in a second.' },
+    common: { privacy: 'Privacy', terms: 'Terms', done: 'Done', cancel: 'Cancel', back: 'Back', requestFailed: 'Request failed', sessionExpired: 'Session expired — sign in again.' },
+    login: { tagline: 'Earn coins by supporting other creators.<br>Spend them to grow your channel.', continue: 'Continue with Google', signingIn: 'Signing in…', disclaimer: 'We use your Google account to verify YouTube actions.', cancelled: 'Sign-in cancelled.', closed: 'Sign-in was closed.', loading: 'Google sign-in is still loading — try again in a second.', referralPlaceholder: 'Referral code (optional)' },
     tabs: { home: 'Home', earn: 'Earn', grow: 'Grow', wallet: 'Wallet', profile: 'Profile' },
     home: { balance: 'Your balance', coinHint: 'Complete tasks, earn more coins', campaigns: 'Campaigns', completed: 'Completed', earnCoins: '📋 Earn coins', getSubs: '📈 Grow', recentActivity: 'Recent activity', noTransactions: 'No transactions yet' },
     earn: { title: 'Earn Coins', all: 'All', none: 'No tasks right now.', checkBack: 'Pull down or check back soon!', left: 'left', min: 'min' },
@@ -44,11 +44,12 @@ const T = {
     profile: { title: 'Profile', coins: 'Coins', role: 'Role', channel: 'Channel', linked: 'Linked', support: 'Support', language: 'Language', admin: 'Admin Panel', signOut: 'Sign Out', deleteAccount: 'Delete Account', deleteConfirm: 'Permanently delete your account and all data? This cannot be undone.' },
     tx: { welcome: '🎁 Welcome bonus', created: '📣 Campaign created — {{type}}, {{slots}} slots', free: ' (free)', completed: '✅ Task completed — {{type}}', completedComment: '✅ Task + comment bonus — {{type}}', refund: '↩️ Campaign refund', reclaimed: '⚠️ Coins reclaimed — {{type}}', purchase: '💰 Coins purchased — {{coins}} ({{usd}}$)' },
     buy: { title: 'Buy coins', subtitle: 'Top up instantly with crypto — pay in USDT (TRC20).', buyNow: 'Buy', redirecting: 'Opening…', back: 'Wallet', noInvoice: 'Could not start checkout. Please try again.', secure: '🔒 Secure crypto checkout by NOWPayments. Coins are added automatically once your payment confirms.', success: '✅ Payment received! Your coins will appear here once it’s confirmed (usually within a minute).', cancelled: 'Payment cancelled — you were not charged.', custom: 'Or enter a custom amount ($)', min: 'Minimum $20', coins: 'coins', bonus: 'bonus' },
+    referral: { invite: 'Invite friends', title: 'Invite friends', subtitle: 'Share your code. When a friend joins and completes their first task, you get {{referrer}} coins and they get {{referee}}.', yourCode: 'Your code', share: 'Share my code', shareMessage: 'Join me on SubsShare and grow your YouTube channel! Use my code {{code}} when you sign up and we both get bonus coins.', copied: 'Code copied!', joined: 'Friends joined', pending: 'Pending', earned: 'Coins earned', note: 'Your friend must sign up with your code and complete their first verified task for the reward to be paid to both of you.' },
   },
 
   ar: {
-    common: { privacy: 'الخصوصية', terms: 'الشروط', done: 'تم', cancel: 'إلغاء', requestFailed: 'فشل الطلب', sessionExpired: 'انتهت الجلسة — سجّل الدخول مرة أخرى.' },
-    login: { tagline: 'اكسب العملات بدعم المبدعين الآخرين.<br>أنفِقها لتنمية قناتك.', continue: 'المتابعة باستخدام Google', signingIn: 'جارٍ تسجيل الدخول…', disclaimer: 'نستخدم حساب Google للتحقّق من إجراءات YouTube.', cancelled: 'تم إلغاء تسجيل الدخول.', closed: 'تم إغلاق نافذة تسجيل الدخول.', loading: 'ما زال تسجيل الدخول عبر Google قيد التحميل — حاول بعد ثانية.' },
+    common: { privacy: 'الخصوصية', terms: 'الشروط', done: 'تم', cancel: 'إلغاء', back: 'رجوع', requestFailed: 'فشل الطلب', sessionExpired: 'انتهت الجلسة — سجّل الدخول مرة أخرى.' },
+    login: { tagline: 'اكسب العملات بدعم المبدعين الآخرين.<br>أنفِقها لتنمية قناتك.', continue: 'المتابعة باستخدام Google', signingIn: 'جارٍ تسجيل الدخول…', disclaimer: 'نستخدم حساب Google للتحقّق من إجراءات YouTube.', cancelled: 'تم إلغاء تسجيل الدخول.', closed: 'تم إغلاق نافذة تسجيل الدخول.', loading: 'ما زال تسجيل الدخول عبر Google قيد التحميل — حاول بعد ثانية.', referralPlaceholder: 'رمز الإحالة (اختياري)' },
     tabs: { earn: 'اكسب', grow: 'نمِّ', wallet: 'المحفظة', profile: 'الملف الشخصي' },
     earn: { title: 'اكسب عملات', all: 'الكل', none: 'لا توجد مهام الآن.', checkBack: 'اسحب للأسفل أو عُد قريبًا!', left: 'متبقٍ', min: 'دقيقة' },
     task: { subscribe: 'اشتراك', like: 'إعجاب', like_comment: 'إعجاب + تعليق', subscribe_like: 'اشتراك + إعجاب', watch: 'مشاهدة' },
@@ -65,11 +66,12 @@ const T = {
     wallet: { title: 'المحفظة', none: 'لا توجد معاملات بعد.' },
     profile: { title: 'الملف الشخصي', coins: 'العملات', role: 'الدور', channel: 'القناة', linked: 'مرتبطة', support: 'الدعم', language: 'اللغة', signOut: 'تسجيل الخروج', deleteAccount: 'حذف الحساب', deleteConfirm: 'حذف حسابك وكل بياناتك نهائيًا؟ لا يمكن التراجع.' },
     tx: { welcome: '🎁 مكافأة الترحيب', created: '📣 إنشاء حملة — {{type}}، {{slots}} خانة', free: ' (مجانًا)', completed: '✅ اكتملت مهمة — {{type}}', completedComment: '✅ مهمة + مكافأة تعليق — {{type}}', refund: '↩️ استرداد حملة', reclaimed: '⚠️ تم استرداد العملات — {{type}}' },
+    referral: { invite: 'ادعُ الأصدقاء', title: 'ادعُ الأصدقاء', subtitle: 'شارك رمزك. عندما ينضمّ صديق ويكمل مهمته الأولى، تحصل على {{referrer}} عملة ويحصل هو على {{referee}}.', yourCode: 'رمزك', share: 'شارك رمزي', shareMessage: 'انضمّ إليّ في SubsShare وطوّر قناتك على YouTube! استخدم رمزي {{code}} عند التسجيل ونحصل كلانا على عملات إضافية.', copied: 'تم نسخ الرمز!', joined: 'الأصدقاء المنضمّون', pending: 'قيد الانتظار', earned: 'العملات المكتسبة', note: 'يجب أن يسجّل صديقك باستخدام رمزك ويكمل أول مهمة موثّقة له حتى تُدفع المكافأة لكليكما.' },
   },
 
   fr: {
-    common: { privacy: 'Confidentialité', terms: 'Conditions', done: 'Terminé', cancel: 'Annuler', requestFailed: 'Échec de la requête', sessionExpired: 'Session expirée — reconnectez-vous.' },
-    login: { tagline: 'Gagnez des pièces en soutenant d’autres créateurs.<br>Dépensez-les pour développer votre chaîne.', continue: 'Continuer avec Google', signingIn: 'Connexion…', disclaimer: 'Nous utilisons votre compte Google pour vérifier les actions YouTube.', cancelled: 'Connexion annulée.', closed: 'Connexion fermée.', loading: 'La connexion Google se charge encore — réessayez dans un instant.' },
+    common: { privacy: 'Confidentialité', terms: 'Conditions', done: 'Terminé', cancel: 'Annuler', back: 'Retour', requestFailed: 'Échec de la requête', sessionExpired: 'Session expirée — reconnectez-vous.' },
+    login: { tagline: 'Gagnez des pièces en soutenant d’autres créateurs.<br>Dépensez-les pour développer votre chaîne.', continue: 'Continuer avec Google', signingIn: 'Connexion…', disclaimer: 'Nous utilisons votre compte Google pour vérifier les actions YouTube.', cancelled: 'Connexion annulée.', closed: 'Connexion fermée.', loading: 'La connexion Google se charge encore — réessayez dans un instant.', referralPlaceholder: 'Code de parrainage (facultatif)' },
     tabs: { earn: 'Gagner', grow: 'Booster', wallet: 'Portefeuille', profile: 'Profil' },
     earn: { title: 'Gagner des pièces', all: 'Tout', none: 'Aucune tâche pour le moment.', checkBack: 'Tirez vers le bas ou revenez bientôt !', left: 'restant', min: 'min' },
     task: { subscribe: 'S’abonner', like: 'J’aime', like_comment: 'J’aime + Commentaire', subscribe_like: 'Abo + J’aime', watch: 'Regarder' },
@@ -86,11 +88,12 @@ const T = {
     wallet: { title: 'Portefeuille', none: 'Aucune transaction pour le moment.' },
     profile: { title: 'Profil', coins: 'Pièces', role: 'Rôle', channel: 'Chaîne', linked: 'Liée', support: 'Support', language: 'Langue', signOut: 'Se déconnecter', deleteAccount: 'Supprimer le compte', deleteConfirm: 'Supprimer définitivement votre compte et toutes vos données ? Action irréversible.' },
     tx: { welcome: '🎁 Bonus de bienvenue', created: '📣 Campagne créée — {{type}}, {{slots}} places', free: ' (gratuit)', completed: '✅ Tâche terminée — {{type}}', completedComment: '✅ Tâche + bonus commentaire — {{type}}', refund: '↩️ Remboursement de campagne', reclaimed: '⚠️ Pièces reprises — {{type}}' },
+    referral: { invite: 'Inviter des amis', title: 'Inviter des amis', subtitle: 'Partagez votre code. Quand un ami s’inscrit et accomplit sa première tâche, vous recevez {{referrer}} pièces et il en reçoit {{referee}}.', yourCode: 'Votre code', share: 'Partager mon code', shareMessage: 'Rejoignez-moi sur SubsShare et développez votre chaîne YouTube ! Utilisez mon code {{code}} à l’inscription et nous recevons tous les deux des pièces bonus.', copied: 'Code copié !', joined: 'Amis inscrits', pending: 'En attente', earned: 'Pièces gagnées', note: 'Votre ami doit s’inscrire avec votre code et accomplir sa première tâche vérifiée pour que la récompense vous soit versée à tous les deux.' },
   },
 
   es: {
-    common: { privacy: 'Privacidad', terms: 'Términos', done: 'Listo', cancel: 'Cancelar', requestFailed: 'La solicitud falló', sessionExpired: 'Sesión expirada — vuelve a iniciar sesión.' },
-    login: { tagline: 'Gana monedas apoyando a otros creadores.<br>Gástalas para hacer crecer tu canal.', continue: 'Continuar con Google', signingIn: 'Iniciando sesión…', disclaimer: 'Usamos tu cuenta de Google para verificar acciones de YouTube.', cancelled: 'Inicio de sesión cancelado.', closed: 'Se cerró el inicio de sesión.', loading: 'El inicio de sesión de Google aún se está cargando — inténtalo en un segundo.' },
+    common: { privacy: 'Privacidad', terms: 'Términos', done: 'Listo', cancel: 'Cancelar', back: 'Atrás', requestFailed: 'La solicitud falló', sessionExpired: 'Sesión expirada — vuelve a iniciar sesión.' },
+    login: { tagline: 'Gana monedas apoyando a otros creadores.<br>Gástalas para hacer crecer tu canal.', continue: 'Continuar con Google', signingIn: 'Iniciando sesión…', disclaimer: 'Usamos tu cuenta de Google para verificar acciones de YouTube.', cancelled: 'Inicio de sesión cancelado.', closed: 'Se cerró el inicio de sesión.', loading: 'El inicio de sesión de Google aún se está cargando — inténtalo en un segundo.', referralPlaceholder: 'Código de referido (opcional)' },
     tabs: { earn: 'Ganar', grow: 'Crecer', wallet: 'Cartera', profile: 'Perfil' },
     earn: { title: 'Gana monedas', all: 'Todas', none: 'No hay tareas ahora mismo.', checkBack: 'Desliza hacia abajo o vuelve pronto.', left: 'rest.', min: 'min' },
     task: { subscribe: 'Suscribirse', like: 'Me gusta', like_comment: 'Me gusta + Comentario', subscribe_like: 'Sub + Me gusta', watch: 'Ver' },
@@ -107,11 +110,12 @@ const T = {
     wallet: { title: 'Cartera', none: 'Aún no hay transacciones.' },
     profile: { title: 'Perfil', coins: 'Monedas', role: 'Rol', channel: 'Canal', linked: 'Vinculado', support: 'Soporte', language: 'Idioma', signOut: 'Cerrar sesión', deleteAccount: 'Eliminar cuenta', deleteConfirm: '¿Eliminar permanentemente tu cuenta y todos los datos? No se puede deshacer.' },
     tx: { welcome: '🎁 Bono de bienvenida', created: '📣 Campaña creada — {{type}}, {{slots}} cupos', free: ' (gratis)', completed: '✅ Tarea completada — {{type}}', completedComment: '✅ Tarea + bono de comentario — {{type}}', refund: '↩️ Reembolso de campaña', reclaimed: '⚠️ Monedas recuperadas — {{type}}' },
+    referral: { invite: 'Invitar amigos', title: 'Invitar amigos', subtitle: 'Comparte tu código. Cuando un amigo se une y completa su primera tarea, tú recibes {{referrer}} monedas y él recibe {{referee}}.', yourCode: 'Tu código', share: 'Compartir mi código', shareMessage: '¡Únete a mí en SubsShare y haz crecer tu canal de YouTube! Usa mi código {{code}} al registrarte y ambos recibimos monedas de bonus.', copied: '¡Código copiado!', joined: 'Amigos unidos', pending: 'Pendiente', earned: 'Monedas ganadas', note: 'Tu amigo debe registrarse con tu código y completar su primera tarea verificada para que la recompensa se pague a ambos.' },
   },
 
   pt: {
-    common: { privacy: 'Privacidade', terms: 'Termos', done: 'Concluído', cancel: 'Cancelar', requestFailed: 'Falha na solicitação', sessionExpired: 'Sessão expirada — entre novamente.' },
-    login: { tagline: 'Ganhe moedas apoiando outros criadores.<br>Gaste-as para crescer seu canal.', continue: 'Continuar com o Google', signingIn: 'Entrando…', disclaimer: 'Usamos sua conta Google para verificar ações do YouTube.', cancelled: 'Login cancelado.', closed: 'O login foi fechado.', loading: 'O login do Google ainda está carregando — tente de novo em um segundo.' },
+    common: { privacy: 'Privacidade', terms: 'Termos', done: 'Concluído', cancel: 'Cancelar', back: 'Voltar', requestFailed: 'Falha na solicitação', sessionExpired: 'Sessão expirada — entre novamente.' },
+    login: { tagline: 'Ganhe moedas apoiando outros criadores.<br>Gaste-as para crescer seu canal.', continue: 'Continuar com o Google', signingIn: 'Entrando…', disclaimer: 'Usamos sua conta Google para verificar ações do YouTube.', cancelled: 'Login cancelado.', closed: 'O login foi fechado.', loading: 'O login do Google ainda está carregando — tente de novo em um segundo.', referralPlaceholder: 'Código de indicação (opcional)' },
     tabs: { earn: 'Ganhar', grow: 'Crescer', wallet: 'Carteira', profile: 'Perfil' },
     earn: { title: 'Ganhe moedas', all: 'Todas', none: 'Nenhuma tarefa no momento.', checkBack: 'Puxe para baixo ou volte em breve!', left: 'rest.', min: 'min' },
     task: { subscribe: 'Inscrever-se', like: 'Curtir', like_comment: 'Curtir + Comentar', subscribe_like: 'Inscr. + Curtir', watch: 'Assistir' },
@@ -128,11 +132,12 @@ const T = {
     wallet: { title: 'Carteira', none: 'Nenhuma transação ainda.' },
     profile: { title: 'Perfil', coins: 'Moedas', role: 'Função', channel: 'Canal', linked: 'Vinculado', support: 'Suporte', language: 'Idioma', signOut: 'Sair', deleteAccount: 'Excluir conta', deleteConfirm: 'Excluir permanentemente sua conta e todos os dados? Isto não pode ser desfeito.' },
     tx: { welcome: '🎁 Bônus de boas-vindas', created: '📣 Campanha criada — {{type}}, {{slots}} vagas', free: ' (grátis)', completed: '✅ Tarefa concluída — {{type}}', completedComment: '✅ Tarefa + bônus de comentário — {{type}}', refund: '↩️ Reembolso de campanha', reclaimed: '⚠️ Moedas retomadas — {{type}}' },
+    referral: { invite: 'Convidar amigos', title: 'Convidar amigos', subtitle: 'Compartilhe seu código. Quando um amigo entra e conclui a primeira tarefa, você recebe {{referrer}} moedas e ele recebe {{referee}}.', yourCode: 'Seu código', share: 'Compartilhar meu código', shareMessage: 'Junte-se a mim no SubsShare e faça seu canal do YouTube crescer! Use meu código {{code}} ao se cadastrar e nós dois ganhamos moedas de bônus.', copied: 'Código copiado!', joined: 'Amigos que entraram', pending: 'Pendente', earned: 'Moedas ganhas', note: 'Seu amigo precisa se cadastrar com o seu código e concluir a primeira tarefa verificada para que a recompensa seja paga a ambos.' },
   },
 
   tr: {
-    common: { privacy: 'Gizlilik', terms: 'Koşullar', done: 'Tamam', cancel: 'İptal', requestFailed: 'İstek başarısız', sessionExpired: 'Oturum süresi doldu — tekrar giriş yapın.' },
-    login: { tagline: 'Diğer içerik üreticilerini destekleyerek coin kazanın.<br>Kanalınızı büyütmek için harcayın.', continue: 'Google ile devam et', signingIn: 'Giriş yapılıyor…', disclaimer: 'YouTube işlemlerini doğrulamak için Google hesabınızı kullanırız.', cancelled: 'Giriş iptal edildi.', closed: 'Giriş penceresi kapatıldı.', loading: 'Google girişi hâlâ yükleniyor — bir saniye sonra tekrar deneyin.' },
+    common: { privacy: 'Gizlilik', terms: 'Koşullar', done: 'Tamam', cancel: 'İptal', back: 'Geri', requestFailed: 'İstek başarısız', sessionExpired: 'Oturum süresi doldu — tekrar giriş yapın.' },
+    login: { tagline: 'Diğer içerik üreticilerini destekleyerek coin kazanın.<br>Kanalınızı büyütmek için harcayın.', continue: 'Google ile devam et', signingIn: 'Giriş yapılıyor…', disclaimer: 'YouTube işlemlerini doğrulamak için Google hesabınızı kullanırız.', cancelled: 'Giriş iptal edildi.', closed: 'Giriş penceresi kapatıldı.', loading: 'Google girişi hâlâ yükleniyor — bir saniye sonra tekrar deneyin.', referralPlaceholder: 'Referans kodu (isteğe bağlı)' },
     tabs: { earn: 'Kazan', grow: 'Büyüt', wallet: 'Cüzdan', profile: 'Profil' },
     earn: { title: 'Coin Kazan', all: 'Tümü', none: 'Şu anda görev yok.', checkBack: 'Aşağı çekin veya yakında tekrar bakın!', left: 'kaldı', min: 'dk' },
     task: { subscribe: 'Abone ol', like: 'Beğen', like_comment: 'Beğen + Yorum', subscribe_like: 'Abone + Beğen', watch: 'İzle' },
@@ -149,11 +154,12 @@ const T = {
     wallet: { title: 'Cüzdan', none: 'Henüz işlem yok.' },
     profile: { title: 'Profil', coins: 'Coin', role: 'Rol', channel: 'Kanal', linked: 'Bağlı', support: 'Destek', language: 'Dil', signOut: 'Çıkış yap', deleteAccount: 'Hesabı sil', deleteConfirm: 'Hesabınız ve tüm verileriniz kalıcı olarak silinsin mi? Bu geri alınamaz.' },
     tx: { welcome: '🎁 Hoş geldin bonusu', created: '📣 Kampanya oluşturuldu — {{type}}, {{slots}} kontenjan', free: ' (ücretsiz)', completed: '✅ Görev tamamlandı — {{type}}', completedComment: '✅ Görev + yorum bonusu — {{type}}', refund: '↩️ Kampanya iadesi', reclaimed: '⚠️ Coinler geri alındı — {{type}}' },
+    referral: { invite: 'Arkadaşlarını davet et', title: 'Arkadaşlarını davet et', subtitle: 'Kodunu paylaş. Bir arkadaşın katılıp ilk görevini tamamladığında sen {{referrer}} coin, o da {{referee}} kazanır.', yourCode: 'Kodun', share: 'Kodumu paylaş', shareMessage: 'SubsShare’de bana katıl ve YouTube kanalını büyüt! Kaydolurken {{code}} kodumu kullan, ikimiz de bonus coin kazanalım.', copied: 'Kod kopyalandı!', joined: 'Katılan arkadaşlar', pending: 'Beklemede', earned: 'Kazanılan coin', note: 'Ödülün ikinize de ödenmesi için arkadaşının senin kodunla kaydolması ve ilk doğrulanmış görevini tamamlaması gerekir.' },
   },
 
   id: {
-    common: { privacy: 'Privasi', terms: 'Ketentuan', done: 'Selesai', cancel: 'Batal', requestFailed: 'Permintaan gagal', sessionExpired: 'Sesi berakhir — masuk lagi.' },
-    login: { tagline: 'Dapatkan koin dengan mendukung kreator lain.<br>Gunakan untuk menumbuhkan channel-mu.', continue: 'Lanjutkan dengan Google', signingIn: 'Masuk…', disclaimer: 'Kami memakai akun Google-mu untuk memverifikasi tindakan YouTube.', cancelled: 'Masuk dibatalkan.', closed: 'Jendela masuk ditutup.', loading: 'Masuk Google masih dimuat — coba lagi sebentar.' },
+    common: { privacy: 'Privasi', terms: 'Ketentuan', done: 'Selesai', cancel: 'Batal', back: 'Kembali', requestFailed: 'Permintaan gagal', sessionExpired: 'Sesi berakhir — masuk lagi.' },
+    login: { tagline: 'Dapatkan koin dengan mendukung kreator lain.<br>Gunakan untuk menumbuhkan channel-mu.', continue: 'Lanjutkan dengan Google', signingIn: 'Masuk…', disclaimer: 'Kami memakai akun Google-mu untuk memverifikasi tindakan YouTube.', cancelled: 'Masuk dibatalkan.', closed: 'Jendela masuk ditutup.', loading: 'Masuk Google masih dimuat — coba lagi sebentar.', referralPlaceholder: 'Kode referal (opsional)' },
     tabs: { earn: 'Hasilkan', grow: 'Tumbuh', wallet: 'Dompet', profile: 'Profil' },
     earn: { title: 'Hasilkan Koin', all: 'Semua', none: 'Belum ada tugas saat ini.', checkBack: 'Tarik ke bawah atau cek lagi nanti!', left: 'tersisa', min: 'mnt' },
     task: { subscribe: 'Langganan', like: 'Suka', like_comment: 'Suka + Komentar', subscribe_like: 'Langg. + Suka', watch: 'Tonton' },
@@ -170,11 +176,12 @@ const T = {
     wallet: { title: 'Dompet', none: 'Belum ada transaksi.' },
     profile: { title: 'Profil', coins: 'Koin', role: 'Peran', channel: 'Channel', linked: 'Tertaut', support: 'Dukungan', language: 'Bahasa', signOut: 'Keluar', deleteAccount: 'Hapus akun', deleteConfirm: 'Hapus permanen akun dan semua datamu? Ini tidak bisa dibatalkan.' },
     tx: { welcome: '🎁 Bonus selamat datang', created: '📣 Kampanye dibuat — {{type}}, {{slots}} slot', free: ' (gratis)', completed: '✅ Tugas selesai — {{type}}', completedComment: '✅ Tugas + bonus komentar — {{type}}', refund: '↩️ Pengembalian kampanye', reclaimed: '⚠️ Koin ditarik kembali — {{type}}' },
+    referral: { invite: 'Undang teman', title: 'Undang teman', subtitle: 'Bagikan kodemu. Saat teman bergabung dan menyelesaikan tugas pertamanya, kamu dapat {{referrer}} koin dan dia dapat {{referee}}.', yourCode: 'Kodemu', share: 'Bagikan kodeku', shareMessage: 'Gabung denganku di SubsShare dan kembangkan channel YouTube-mu! Pakai kodeku {{code}} saat mendaftar dan kita berdua dapat koin bonus.', copied: 'Kode disalin!', joined: 'Teman bergabung', pending: 'Menunggu', earned: 'Koin diperoleh', note: 'Temanmu harus mendaftar dengan kodemu dan menyelesaikan tugas terverifikasi pertamanya agar hadiah dibayarkan ke kalian berdua.' },
   },
 
   hi: {
-    common: { privacy: 'गोपनीयता', terms: 'शर्तें', done: 'हो गया', cancel: 'रद्द करें', requestFailed: 'अनुरोध विफल', sessionExpired: 'सत्र समाप्त — फिर से साइन इन करें।' },
-    login: { tagline: 'दूसरे क्रिएटर्स का समर्थन करके सिक्के कमाएँ।<br>अपना चैनल बढ़ाने के लिए उन्हें खर्च करें।', continue: 'Google से जारी रखें', signingIn: 'साइन इन हो रहा है…', disclaimer: 'हम YouTube क्रियाओं की पुष्टि के लिए आपके Google खाते का उपयोग करते हैं।', cancelled: 'साइन इन रद्द किया गया।', closed: 'साइन इन बंद कर दिया गया।', loading: 'Google साइन इन अभी लोड हो रहा है — एक सेकंड में फिर कोशिश करें।' },
+    common: { privacy: 'गोपनीयता', terms: 'शर्तें', done: 'हो गया', cancel: 'रद्द करें', back: 'वापस', requestFailed: 'अनुरोध विफल', sessionExpired: 'सत्र समाप्त — फिर से साइन इन करें।' },
+    login: { tagline: 'दूसरे क्रिएटर्स का समर्थन करके सिक्के कमाएँ।<br>अपना चैनल बढ़ाने के लिए उन्हें खर्च करें।', continue: 'Google से जारी रखें', signingIn: 'साइन इन हो रहा है…', disclaimer: 'हम YouTube क्रियाओं की पुष्टि के लिए आपके Google खाते का उपयोग करते हैं।', cancelled: 'साइन इन रद्द किया गया।', closed: 'साइन इन बंद कर दिया गया।', loading: 'Google साइन इन अभी लोड हो रहा है — एक सेकंड में फिर कोशिश करें।', referralPlaceholder: 'रेफ़रल कोड (वैकल्पिक)' },
     tabs: { earn: 'कमाएँ', grow: 'बढ़ाएँ', wallet: 'वॉलेट', profile: 'प्रोफ़ाइल' },
     earn: { title: 'सिक्के कमाएँ', all: 'सभी', none: 'अभी कोई कार्य नहीं।', checkBack: 'नीचे खींचें या जल्द फिर देखें!', left: 'शेष', min: 'मिनट' },
     task: { subscribe: 'सब्सक्राइब', like: 'लाइक', like_comment: 'लाइक + कमेंट', subscribe_like: 'सब + लाइक', watch: 'देखें' },
@@ -191,11 +198,12 @@ const T = {
     wallet: { title: 'वॉलेट', none: 'अभी कोई लेन-देन नहीं।' },
     profile: { title: 'प्रोफ़ाइल', coins: 'सिक्के', role: 'भूमिका', channel: 'चैनल', linked: 'जुड़ा', support: 'सहायता', language: 'भाषा', signOut: 'साइन आउट', deleteAccount: 'खाता हटाएँ', deleteConfirm: 'अपना खाता और सभी डेटा स्थायी रूप से हटाएँ? यह पूर्ववत नहीं हो सकता।' },
     tx: { welcome: '🎁 स्वागत बोनस', created: '📣 अभियान बना — {{type}}, {{slots}} स्लॉट', free: ' (मुफ़्त)', completed: '✅ कार्य पूर्ण — {{type}}', completedComment: '✅ कार्य + कमेंट बोनस — {{type}}', refund: '↩️ अभियान वापसी', reclaimed: '⚠️ सिक्के वापस लिए — {{type}}' },
+    referral: { invite: 'दोस्तों को बुलाएँ', title: 'दोस्तों को बुलाएँ', subtitle: 'अपना कोड शेयर करें। जब कोई दोस्त जुड़कर अपना पहला कार्य पूरा करता है, तो आपको {{referrer}} सिक्के और उसे {{referee}} मिलते हैं।', yourCode: 'आपका कोड', share: 'मेरा कोड शेयर करें', shareMessage: 'SubsShare पर मेरे साथ जुड़ें और अपना YouTube चैनल बढ़ाएँ! साइन अप करते समय मेरा कोड {{code}} इस्तेमाल करें और हम दोनों को बोनस सिक्के मिलेंगे।', copied: 'कोड कॉपी हो गया!', joined: 'जुड़े दोस्त', pending: 'लंबित', earned: 'कमाए सिक्के', note: 'इनाम आप दोनों को मिलने के लिए आपके दोस्त को आपके कोड से साइन अप करना होगा और अपना पहला सत्यापित कार्य पूरा करना होगा।' },
   },
 
   ru: {
-    common: { privacy: 'Конфиденциальность', terms: 'Условия', done: 'Готово', cancel: 'Отмена', requestFailed: 'Ошибка запроса', sessionExpired: 'Сессия истекла — войдите снова.' },
-    login: { tagline: 'Зарабатывайте монеты, поддерживая других авторов.<br>Тратьте их на рост своего канала.', continue: 'Продолжить с Google', signingIn: 'Вход…', disclaimer: 'Мы используем ваш аккаунт Google для проверки действий на YouTube.', cancelled: 'Вход отменён.', closed: 'Окно входа закрыто.', loading: 'Вход через Google ещё загружается — попробуйте через секунду.' },
+    common: { privacy: 'Конфиденциальность', terms: 'Условия', done: 'Готово', cancel: 'Отмена', back: 'Назад', requestFailed: 'Ошибка запроса', sessionExpired: 'Сессия истекла — войдите снова.' },
+    login: { tagline: 'Зарабатывайте монеты, поддерживая других авторов.<br>Тратьте их на рост своего канала.', continue: 'Продолжить с Google', signingIn: 'Вход…', disclaimer: 'Мы используем ваш аккаунт Google для проверки действий на YouTube.', cancelled: 'Вход отменён.', closed: 'Окно входа закрыто.', loading: 'Вход через Google ещё загружается — попробуйте через секунду.', referralPlaceholder: 'Реферальный код (необязательно)' },
     tabs: { earn: 'Заработок', grow: 'Рост', wallet: 'Кошелёк', profile: 'Профиль' },
     earn: { title: 'Зарабатывай монеты', all: 'Все', none: 'Сейчас нет заданий.', checkBack: 'Потяните вниз или зайдите позже!', left: 'осталось', min: 'мин' },
     task: { subscribe: 'Подписаться', like: 'Лайк', like_comment: 'Лайк + Коммент', subscribe_like: 'Подп. + Лайк', watch: 'Смотреть' },
@@ -212,11 +220,12 @@ const T = {
     wallet: { title: 'Кошелёк', none: 'Транзакций пока нет.' },
     profile: { title: 'Профиль', coins: 'Монеты', role: 'Роль', channel: 'Канал', linked: 'Привязан', support: 'Поддержка', language: 'Язык', signOut: 'Выйти', deleteAccount: 'Удалить аккаунт', deleteConfirm: 'Навсегда удалить аккаунт и все данные? Это нельзя отменить.' },
     tx: { welcome: '🎁 Приветственный бонус', created: '📣 Кампания создана — {{type}}, {{slots}} слотов', free: ' (бесплатно)', completed: '✅ Задание выполнено — {{type}}', completedComment: '✅ Задание + бонус за комментарий — {{type}}', refund: '↩️ Возврат за кампанию', reclaimed: '⚠️ Монеты возвращены — {{type}}' },
+    referral: { invite: 'Пригласить друзей', title: 'Пригласить друзей', subtitle: 'Поделитесь своим кодом. Когда друг присоединится и выполнит первое задание, вы получите {{referrer}} монет, а он — {{referee}}.', yourCode: 'Ваш код', share: 'Поделиться кодом', shareMessage: 'Присоединяйся ко мне в SubsShare и развивай свой YouTube-канал! Используй мой код {{code}} при регистрации, и мы оба получим бонусные монеты.', copied: 'Код скопирован!', joined: 'Друзья присоединились', pending: 'В ожидании', earned: 'Заработано монет', note: 'Чтобы награду получили вы оба, ваш друг должен зарегистрироваться с вашим кодом и выполнить своё первое подтверждённое задание.' },
   },
 
   de: {
-    common: { privacy: 'Datenschutz', terms: 'Nutzungsbedingungen', done: 'Fertig', cancel: 'Abbrechen', requestFailed: 'Anfrage fehlgeschlagen', sessionExpired: 'Sitzung abgelaufen — bitte erneut anmelden.' },
-    login: { tagline: 'Verdiene Münzen, indem du andere Creator unterstützt.<br>Gib sie aus, um deinen Kanal zu vergrößern.', continue: 'Mit Google fortfahren', signingIn: 'Anmeldung…', disclaimer: 'Wir nutzen dein Google-Konto, um YouTube-Aktionen zu verifizieren.', cancelled: 'Anmeldung abgebrochen.', closed: 'Anmeldefenster geschlossen.', loading: 'Die Google-Anmeldung lädt noch — versuch es gleich nochmal.' },
+    common: { privacy: 'Datenschutz', terms: 'Nutzungsbedingungen', done: 'Fertig', cancel: 'Abbrechen', back: 'Zurück', requestFailed: 'Anfrage fehlgeschlagen', sessionExpired: 'Sitzung abgelaufen — bitte erneut anmelden.' },
+    login: { tagline: 'Verdiene Münzen, indem du andere Creator unterstützt.<br>Gib sie aus, um deinen Kanal zu vergrößern.', continue: 'Mit Google fortfahren', signingIn: 'Anmeldung…', disclaimer: 'Wir nutzen dein Google-Konto, um YouTube-Aktionen zu verifizieren.', cancelled: 'Anmeldung abgebrochen.', closed: 'Anmeldefenster geschlossen.', loading: 'Die Google-Anmeldung lädt noch — versuch es gleich nochmal.', referralPlaceholder: 'Empfehlungscode (optional)' },
     tabs: { earn: 'Verdienen', grow: 'Wachsen', wallet: 'Wallet', profile: 'Profil' },
     earn: { title: 'Münzen verdienen', all: 'Alle', none: 'Gerade keine Aufgaben.', checkBack: 'Nach unten ziehen oder bald wieder vorbeischauen!', left: 'übrig', min: 'Min' },
     task: { subscribe: 'Abonnieren', like: 'Like', like_comment: 'Like + Kommentar', subscribe_like: 'Abo + Like', watch: 'Ansehen' },
@@ -233,11 +242,12 @@ const T = {
     wallet: { title: 'Wallet', none: 'Noch keine Transaktionen.' },
     profile: { title: 'Profil', coins: 'Münzen', role: 'Rolle', channel: 'Kanal', linked: 'Verknüpft', support: 'Support', language: 'Sprache', signOut: 'Abmelden', deleteAccount: 'Konto löschen', deleteConfirm: 'Konto und alle Daten dauerhaft löschen? Das kann nicht rückgängig gemacht werden.' },
     tx: { welcome: '🎁 Willkommensbonus', created: '📣 Kampagne erstellt — {{type}}, {{slots}} Plätze', free: ' (kostenlos)', completed: '✅ Aufgabe erledigt — {{type}}', completedComment: '✅ Aufgabe + Kommentar-Bonus — {{type}}', refund: '↩️ Kampagnen-Erstattung', reclaimed: '⚠️ Münzen zurückgefordert — {{type}}' },
+    referral: { invite: 'Freunde einladen', title: 'Freunde einladen', subtitle: 'Teile deinen Code. Wenn ein Freund beitritt und seine erste Aufgabe abschließt, erhältst du {{referrer}} Münzen und er erhält {{referee}}.', yourCode: 'Dein Code', share: 'Meinen Code teilen', shareMessage: 'Mach mit mir bei SubsShare mit und lass deinen YouTube-Kanal wachsen! Nutze bei der Anmeldung meinen Code {{code}}, dann bekommen wir beide Bonus-Münzen.', copied: 'Code kopiert!', joined: 'Beigetretene Freunde', pending: 'Ausstehend', earned: 'Verdiente Münzen', note: 'Dein Freund muss sich mit deinem Code anmelden und seine erste verifizierte Aufgabe abschließen, damit die Belohnung an euch beide ausgezahlt wird.' },
   },
 
   'zh-CN': {
-    common: { privacy: '隐私', terms: '条款', done: '完成', cancel: '取消', requestFailed: '请求失败', sessionExpired: '会话已过期 — 请重新登录。' },
-    login: { tagline: '通过支持其他创作者赚取金币。<br>用它们发展你的频道。', continue: '使用 Google 继续', signingIn: '正在登录…', disclaimer: '我们使用你的 Google 账号来验证 YouTube 操作。', cancelled: '登录已取消。', closed: '登录窗口已关闭。', loading: 'Google 登录仍在加载 — 请稍后再试。' },
+    common: { privacy: '隐私', terms: '条款', done: '完成', cancel: '取消', back: '返回', requestFailed: '请求失败', sessionExpired: '会话已过期 — 请重新登录。' },
+    login: { tagline: '通过支持其他创作者赚取金币。<br>用它们发展你的频道。', continue: '使用 Google 继续', signingIn: '正在登录…', disclaimer: '我们使用你的 Google 账号来验证 YouTube 操作。', cancelled: '登录已取消。', closed: '登录窗口已关闭。', loading: 'Google 登录仍在加载 — 请稍后再试。', referralPlaceholder: '推荐码（可选）' },
     tabs: { earn: '赚取', grow: '增长', wallet: '钱包', profile: '我的' },
     earn: { title: '赚取金币', all: '全部', none: '暂时没有任务。', checkBack: '下拉或稍后再来看看！', left: '剩余', min: '分钟' },
     task: { subscribe: '订阅', like: '点赞', like_comment: '点赞 + 评论', subscribe_like: '订阅 + 点赞', watch: '观看' },
@@ -254,11 +264,12 @@ const T = {
     wallet: { title: '钱包', none: '暂无交易。' },
     profile: { title: '我的', coins: '金币', role: '角色', channel: '频道', linked: '已关联', support: '支持', language: '语言', signOut: '退出登录', deleteAccount: '删除账号', deleteConfirm: '永久删除你的账号和所有数据？此操作无法撤销。' },
     tx: { welcome: '🎁 欢迎奖励', created: '📣 活动已创建 — {{type}}，{{slots}} 个名额', free: '（免费）', completed: '✅ 任务完成 — {{type}}', completedComment: '✅ 任务 + 评论奖励 — {{type}}', refund: '↩️ 活动退款', reclaimed: '⚠️ 金币已收回 — {{type}}' },
+    referral: { invite: '邀请好友', title: '邀请好友', subtitle: '分享你的邀请码。当好友加入并完成首个任务后，你可获得 {{referrer}} 金币，对方获得 {{referee}}。', yourCode: '你的邀请码', share: '分享我的邀请码', shareMessage: '快来 SubsShare 和我一起发展你的 YouTube 频道吧！注册时使用我的邀请码 {{code}}，我们都能获得奖励金币。', copied: '邀请码已复制！', joined: '已加入的好友', pending: '待处理', earned: '已赚取金币', note: '你的好友必须使用你的邀请码注册并完成首个已验证任务，奖励才会同时发放给你们双方。' },
   },
 
   'zh-TW': {
-    common: { privacy: '隱私', terms: '條款', done: '完成', cancel: '取消', requestFailed: '請求失敗', sessionExpired: '工作階段已過期 — 請重新登入。' },
-    login: { tagline: '透過支持其他創作者賺取金幣。<br>用它們發展你的頻道。', continue: '使用 Google 繼續', signingIn: '登入中…', disclaimer: '我們使用你的 Google 帳戶來驗證 YouTube 操作。', cancelled: '登入已取消。', closed: '登入視窗已關閉。', loading: 'Google 登入仍在載入 — 請稍後再試。' },
+    common: { privacy: '隱私', terms: '條款', done: '完成', cancel: '取消', back: '返回', requestFailed: '請求失敗', sessionExpired: '工作階段已過期 — 請重新登入。' },
+    login: { tagline: '透過支持其他創作者賺取金幣。<br>用它們發展你的頻道。', continue: '使用 Google 繼續', signingIn: '登入中…', disclaimer: '我們使用你的 Google 帳戶來驗證 YouTube 操作。', cancelled: '登入已取消。', closed: '登入視窗已關閉。', loading: 'Google 登入仍在載入 — 請稍後再試。', referralPlaceholder: '推薦碼（選填）' },
     tabs: { earn: '賺取', grow: '成長', wallet: '錢包', profile: '個人' },
     earn: { title: '賺取金幣', all: '全部', none: '目前沒有任務。', checkBack: '下拉或稍後再來看看！', left: '剩餘', min: '分鐘' },
     task: { subscribe: '訂閱', like: '按讚', like_comment: '按讚 + 留言', subscribe_like: '訂閱 + 讚', watch: '觀看' },
@@ -275,11 +286,12 @@ const T = {
     wallet: { title: '錢包', none: '尚無交易。' },
     profile: { title: '個人', coins: '金幣', role: '角色', channel: '頻道', linked: '已連結', support: '支援', language: '語言', signOut: '登出', deleteAccount: '刪除帳戶', deleteConfirm: '永久刪除你的帳戶和所有資料？此操作無法復原。' },
     tx: { welcome: '🎁 歡迎獎勵', created: '📣 活動已建立 — {{type}}，{{slots}} 個名額', free: '（免費）', completed: '✅ 任務完成 — {{type}}', completedComment: '✅ 任務 + 留言獎勵 — {{type}}', refund: '↩️ 活動退款', reclaimed: '⚠️ 金幣已收回 — {{type}}' },
+    referral: { invite: '邀請好友', title: '邀請好友', subtitle: '分享你的邀請碼。當好友加入並完成首個任務後，你可獲得 {{referrer}} 金幣，對方獲得 {{referee}}。', yourCode: '你的邀請碼', share: '分享我的邀請碼', shareMessage: '快來 SubsShare 和我一起發展你的 YouTube 頻道吧！註冊時使用我的邀請碼 {{code}}，我們都能獲得獎勵金幣。', copied: '邀請碼已複製！', joined: '已加入的好友', pending: '待處理', earned: '已賺取金幣', note: '你的好友必須使用你的邀請碼註冊並完成首個已驗證任務，獎勵才會同時發放給你們雙方。' },
   },
 
   bn: {
-    common: { privacy: 'গোপনীয়তা', terms: 'শর্তাবলী', done: 'সম্পন্ন', cancel: 'বাতিল', requestFailed: 'অনুরোধ ব্যর্থ', sessionExpired: 'সেশন শেষ — আবার সাইন ইন করুন।' },
-    login: { tagline: 'অন্য নির্মাতাদের সমর্থন করে কয়েন আয় করুন।<br>আপনার চ্যানেল বাড়াতে সেগুলো খরচ করুন।', continue: 'Google দিয়ে চালিয়ে যান', signingIn: 'সাইন ইন হচ্ছে…', disclaimer: 'YouTube ক্রিয়া যাচাই করতে আমরা আপনার Google অ্যাকাউন্ট ব্যবহার করি।', cancelled: 'সাইন ইন বাতিল হয়েছে।', closed: 'সাইন ইন উইন্ডো বন্ধ হয়েছে।', loading: 'Google সাইন ইন এখনও লোড হচ্ছে — এক সেকেন্ড পরে আবার চেষ্টা করুন।' },
+    common: { privacy: 'গোপনীয়তা', terms: 'শর্তাবলী', done: 'সম্পন্ন', cancel: 'বাতিল', back: 'পিছনে', requestFailed: 'অনুরোধ ব্যর্থ', sessionExpired: 'সেশন শেষ — আবার সাইন ইন করুন।' },
+    login: { tagline: 'অন্য নির্মাতাদের সমর্থন করে কয়েন আয় করুন।<br>আপনার চ্যানেল বাড়াতে সেগুলো খরচ করুন।', continue: 'Google দিয়ে চালিয়ে যান', signingIn: 'সাইন ইন হচ্ছে…', disclaimer: 'YouTube ক্রিয়া যাচাই করতে আমরা আপনার Google অ্যাকাউন্ট ব্যবহার করি।', cancelled: 'সাইন ইন বাতিল হয়েছে।', closed: 'সাইন ইন উইন্ডো বন্ধ হয়েছে।', loading: 'Google সাইন ইন এখনও লোড হচ্ছে — এক সেকেন্ড পরে আবার চেষ্টা করুন।', referralPlaceholder: 'রেফারাল কোড (ঐচ্ছিক)' },
     tabs: { earn: 'আয়', grow: 'বৃদ্ধি', wallet: 'ওয়ালেট', profile: 'প্রোফাইল' },
     earn: { title: 'কয়েন আয় করুন', all: 'সব', none: 'এখন কোনো কাজ নেই।', checkBack: 'নিচে টানুন বা শীঘ্রই আবার দেখুন!', left: 'বাকি', min: 'মিনিট' },
     task: { subscribe: 'সাবস্ক্রাইব', like: 'লাইক', like_comment: 'লাইক + কমেন্ট', subscribe_like: 'সাব + লাইক', watch: 'দেখুন' },
@@ -296,11 +308,12 @@ const T = {
     wallet: { title: 'ওয়ালেট', none: 'এখনও কোনো লেনদেন নেই।' },
     profile: { title: 'প্রোফাইল', coins: 'কয়েন', role: 'ভূমিকা', channel: 'চ্যানেল', linked: 'যুক্ত', support: 'সহায়তা', language: 'ভাষা', signOut: 'সাইন আউট', deleteAccount: 'অ্যাকাউন্ট মুছুন', deleteConfirm: 'স্থায়ীভাবে আপনার অ্যাকাউন্ট ও সব ডেটা মুছবেন? এটি ফেরানো যাবে না।' },
     tx: { welcome: '🎁 স্বাগত বোনাস', created: '📣 ক্যাম্পেইন তৈরি — {{type}}, {{slots}} স্লট', free: ' (ফ্রি)', completed: '✅ কাজ সম্পন্ন — {{type}}', completedComment: '✅ কাজ + কমেন্ট বোনাস — {{type}}', refund: '↩️ ক্যাম্পেইন ফেরত', reclaimed: '⚠️ কয়েন ফেরত নেওয়া হয়েছে — {{type}}' },
+    referral: { invite: 'বন্ধুদের আমন্ত্রণ জানান', title: 'বন্ধুদের আমন্ত্রণ জানান', subtitle: 'আপনার কোড শেয়ার করুন। কোনো বন্ধু যোগ দিয়ে প্রথম কাজ সম্পন্ন করলে আপনি {{referrer}} কয়েন এবং সে {{referee}} পায়।', yourCode: 'আপনার কোড', share: 'আমার কোড শেয়ার করুন', shareMessage: 'SubsShare-এ আমার সাথে যোগ দিন এবং আপনার YouTube চ্যানেল বাড়ান! সাইন আপ করার সময় আমার কোড {{code}} ব্যবহার করুন, আমরা দুজনেই বোনাস কয়েন পাব।', copied: 'কোড কপি হয়েছে!', joined: 'যোগ দেওয়া বন্ধু', pending: 'অপেক্ষমাণ', earned: 'অর্জিত কয়েন', note: 'পুরস্কার আপনাদের দুজনকেই দেওয়ার জন্য আপনার বন্ধুকে আপনার কোড দিয়ে সাইন আপ করতে হবে এবং তার প্রথম যাচাইকৃত কাজ সম্পন্ন করতে হবে।' },
   },
 
   ja: {
-    common: { privacy: 'プライバシー', terms: '規約', done: '完了', cancel: 'キャンセル', requestFailed: 'リクエストに失敗しました', sessionExpired: 'セッションが切れました — 再度サインインしてください。' },
-    login: { tagline: '他のクリエイターを応援してコインを獲得。<br>使って自分のチャンネルを伸ばそう。', continue: 'Google で続行', signingIn: 'サインイン中…', disclaimer: 'YouTube の操作を確認するために Google アカウントを使用します。', cancelled: 'サインインをキャンセルしました。', closed: 'サインイン画面を閉じました。', loading: 'Google サインインを読み込み中です — 少し待って再試行してください。' },
+    common: { privacy: 'プライバシー', terms: '規約', done: '完了', cancel: 'キャンセル', back: '戻る', requestFailed: 'リクエストに失敗しました', sessionExpired: 'セッションが切れました — 再度サインインしてください。' },
+    login: { tagline: '他のクリエイターを応援してコインを獲得。<br>使って自分のチャンネルを伸ばそう。', continue: 'Google で続行', signingIn: 'サインイン中…', disclaimer: 'YouTube の操作を確認するために Google アカウントを使用します。', cancelled: 'サインインをキャンセルしました。', closed: 'サインイン画面を閉じました。', loading: 'Google サインインを読み込み中です — 少し待って再試行してください。', referralPlaceholder: '紹介コード（任意）' },
     tabs: { earn: '稼ぐ', grow: '成長', wallet: 'ウォレット', profile: 'プロフィール' },
     earn: { title: 'コインを稼ぐ', all: 'すべて', none: '今はタスクがありません。', checkBack: '下に引くか、後でまた確認してね！', left: '残り', min: '分' },
     task: { subscribe: '登録', like: '高評価', like_comment: '高評価＋コメント', subscribe_like: '登録＋高評価', watch: '視聴' },
@@ -317,11 +330,12 @@ const T = {
     wallet: { title: 'ウォレット', none: 'まだ取引がありません。' },
     profile: { title: 'プロフィール', coins: 'コイン', role: '役割', channel: 'チャンネル', linked: '連携済み', support: 'サポート', language: '言語', signOut: 'サインアウト', deleteAccount: 'アカウント削除', deleteConfirm: 'アカウントと全データを完全に削除しますか？元に戻せません。' },
     tx: { welcome: '🎁 ウェルカムボーナス', created: '📣 キャンペーン作成 — {{type}}、{{slots}} 枠', free: '（無料）', completed: '✅ タスク完了 — {{type}}', completedComment: '✅ タスク＋コメントボーナス — {{type}}', refund: '↩️ キャンペーン返金', reclaimed: '⚠️ コイン回収 — {{type}}' },
+    referral: { invite: '友だちを招待', title: '友だちを招待', subtitle: 'あなたのコードをシェアしよう。友だちが参加して最初のタスクを完了すると、あなたは {{referrer}} コイン、相手は {{referee}} を獲得します。', yourCode: 'あなたのコード', share: 'コードをシェア', shareMessage: 'SubsShare で一緒に YouTube チャンネルを伸ばそう！登録時に私のコード {{code}} を使えば、二人ともボーナスコインがもらえます。', copied: 'コードをコピーしました！', joined: '参加した友だち', pending: '保留中', earned: '獲得コイン', note: '報酬が二人に支払われるには、友だちがあなたのコードで登録し、最初の確認済みタスクを完了する必要があります。' },
   },
 
   ko: {
-    common: { privacy: '개인정보', terms: '약관', done: '완료', cancel: '취소', requestFailed: '요청 실패', sessionExpired: '세션이 만료되었습니다 — 다시 로그인하세요.' },
-    login: { tagline: '다른 크리에이터를 응원하고 코인을 받으세요.<br>코인으로 내 채널을 키우세요.', continue: 'Google로 계속하기', signingIn: '로그인 중…', disclaimer: 'YouTube 활동을 확인하기 위해 Google 계정을 사용합니다.', cancelled: '로그인이 취소되었습니다.', closed: '로그인 창이 닫혔습니다.', loading: 'Google 로그인이 아직 로딩 중입니다 — 잠시 후 다시 시도하세요.' },
+    common: { privacy: '개인정보', terms: '약관', done: '완료', cancel: '취소', back: '뒤로', requestFailed: '요청 실패', sessionExpired: '세션이 만료되었습니다 — 다시 로그인하세요.' },
+    login: { tagline: '다른 크리에이터를 응원하고 코인을 받으세요.<br>코인으로 내 채널을 키우세요.', continue: 'Google로 계속하기', signingIn: '로그인 중…', disclaimer: 'YouTube 활동을 확인하기 위해 Google 계정을 사용합니다.', cancelled: '로그인이 취소되었습니다.', closed: '로그인 창이 닫혔습니다.', loading: 'Google 로그인이 아직 로딩 중입니다 — 잠시 후 다시 시도하세요.', referralPlaceholder: '추천 코드 (선택)' },
     tabs: { earn: '획득', grow: '성장', wallet: '지갑', profile: '프로필' },
     earn: { title: '코인 획득', all: '전체', none: '지금은 작업이 없습니다.', checkBack: '아래로 당기거나 잠시 후 다시 확인하세요!', left: '남음', min: '분' },
     task: { subscribe: '구독', like: '좋아요', like_comment: '좋아요 + 댓글', subscribe_like: '구독 + 좋아요', watch: '시청' },
@@ -338,6 +352,7 @@ const T = {
     wallet: { title: '지갑', none: '아직 거래 내역이 없습니다.' },
     profile: { title: '프로필', coins: '코인', role: '역할', channel: '채널', linked: '연결됨', support: '지원', language: '언어', signOut: '로그아웃', deleteAccount: '계정 삭제', deleteConfirm: '계정과 모든 데이터를 영구히 삭제할까요? 되돌릴 수 없습니다.' },
     tx: { welcome: '🎁 환영 보너스', created: '📣 캠페인 생성 — {{type}}, {{slots}} 슬롯', free: ' (무료)', completed: '✅ 작업 완료 — {{type}}', completedComment: '✅ 작업 + 댓글 보너스 — {{type}}', refund: '↩️ 캠페인 환불', reclaimed: '⚠️ 코인 회수 — {{type}}' },
+    referral: { invite: '친구 초대', title: '친구 초대', subtitle: '내 코드를 공유하세요. 친구가 가입하고 첫 작업을 완료하면 나는 {{referrer}} 코인, 친구는 {{referee}}을 받습니다.', yourCode: '내 코드', share: '내 코드 공유', shareMessage: 'SubsShare에서 저와 함께 YouTube 채널을 키워요! 가입할 때 제 코드 {{code}}를 사용하면 둘 다 보너스 코인을 받아요.', copied: '코드가 복사되었습니다!', joined: '가입한 친구', pending: '대기 중', earned: '획득 코인', note: '보상이 두 사람 모두에게 지급되려면 친구가 내 코드로 가입하고 첫 인증 작업을 완료해야 합니다.' },
   },
 };
 

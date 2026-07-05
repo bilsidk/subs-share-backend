@@ -28,6 +28,7 @@ const S = {
   myTasks: [], channels: [], txs: [],
   modal: null, // {task, status:'idle'|'countdown'|'ready'|'verifying'|'done', countdown, startedAt, error, message}
   busy: false, loginError: '', payNotice: '',
+  referralCode: '', referral: null,
 };
 let countdownTimer = null;
 
@@ -49,7 +50,8 @@ async function req(method, path, body) {
   return data;
 }
 const api = {
-  signIn: (code) => req('POST', '/auth/google', { serverAuthCode: code, web: true }),
+  signIn: (code, referralCode) => req('POST', '/auth/google', { serverAuthCode: code, web: true, referralCode: referralCode || undefined }),
+  getReferral: () => req('GET', '/users/referral'),
   // /users/me returns the user object directly (not wrapped in {user}); normalize either shape
   me: () => req('GET', '/users/me').then(d => (d && d.user) ? d.user : d),
   deleteAccount: () => req('DELETE', '/users/me'),
@@ -59,7 +61,7 @@ const api = {
   myTasks: () => req('GET', '/tasks/my'),
   createTask: (d) => req('POST', '/tasks', d),
   start: (id) => req('POST', `/tasks/${id}/start`).catch(() => {}), // server-stamps the start time
-  verify: (id, startedAt) => req('POST', `/tasks/${id}/verify`, { started_at: startedAt, device_id: deviceId() }),
+  verify: (id, startedAt) => req('POST', `/tasks/${id}/verify`, { started_at: startedAt, device_id: deviceId(), platform: 'web' }),
   pause: (id) => req('PATCH', `/tasks/${id}/pause`),
   resume: (id) => req('PATCH', `/tasks/${id}/resume`),
   cancel: (id) => req('DELETE', `/tasks/${id}`),
@@ -98,6 +100,9 @@ const B = { busy: 0, error: '', customUsd: '' }; // busy = the $ amount currentl
 function signIn() {
   S.loginError = '';
   if (!window.google?.accounts?.oauth2) { S.loginError = tr('login.loading'); return render(); }
+  // Capture the optional referral code from the login field before the OAuth popup.
+  const refEl = document.getElementById('ref-code');
+  const referralCode = refEl ? refEl.value.trim().toUpperCase() : '';
   const codeClient = google.accounts.oauth2.initCodeClient({
     client_id: GOOGLE_CLIENT_ID,
     scope: YT_SCOPE,
@@ -106,7 +111,7 @@ function signIn() {
       if (!resp.code) { S.loginError = tr('login.cancelled'); return render(); }
       S.busy = true; render();
       try {
-        const data = await api.signIn(resp.code);
+        const data = await api.signIn(resp.code, referralCode);
         S.token = data.token; localStorage.setItem('token', data.token);
         S.user = data.user;
         S.busy = false;
@@ -190,6 +195,7 @@ async function loadTab(tab) {
     else if (tab === 'grow') { [S.myTasks, S.channels] = await Promise.all([api.myTasks(), api.channels()]); }
     else if (tab === 'wallet') S.txs = (await api.txs(1)).transactions || [];
     else if (tab === 'home') { [S.myTasks, S.txs] = await Promise.all([api.myTasks(), api.txs(1).then(r => r.transactions || [])]); }
+    else if (tab === 'referral') S.referral = await api.getReferral().catch(() => null);
     else if (tab === 'admin') { const st = await api.adminStatus(); A.stats = st.stats; A.mode = st.api_mode; A.settings = { ...st.settings }; }
     else if (tab === 'profile') S.user = (await api.me()) || S.user;
     if (tab !== 'profile' && S.token) { api.me().then(d => { S.user = d; render(); }).catch(() => {}); }
@@ -422,6 +428,8 @@ function vLogin() {
     <img class="logo" src="logo.png" alt="SubsShare" width="76" height="76" style="border-radius:18px">
     <h1 style="font-size:28px">SubsShare</h1>
     <p style="color:var(--text2);margin:10px 0 30px;line-height:1.5">${tr('login.tagline')}</p>
+    <input id="ref-code" type="text" maxlength="12" placeholder="${tr('login.referralPlaceholder')}" value="${esc(S.referralCode || '')}"
+      style="text-transform:uppercase;text-align:center;letter-spacing:2px;max-width:280px;margin:0 auto 12px;display:block">
     <button class="gbtn" onclick="signIn()" ${S.busy ? 'disabled' : ''}>
       <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.4 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>
       ${S.busy ? tr('login.signingIn') : tr('login.continue')}
@@ -596,10 +604,45 @@ function vProfile() {
       <div class="row"><span class="l">${tr('common.privacy')}</span><a class="v" href="https://viralboostnow.com/privacy.html" target="_blank" rel="noopener">↗</a></div>
       <div class="row"><span class="l">${tr('common.terms')}</span><a class="v" href="https://viralboostnow.com/terms.html" target="_blank" rel="noopener">↗</a></div>
     </div>
+    <button class="btn" style="margin-top:8px" onclick="loadTab('referral')">🎁 ${tr('referral.invite')}</button>
     ${u.is_admin ? `<button class="btn" style="margin-top:8px" onclick="loadTab('admin')">🛠 ${tr('profile.admin')}</button>` : ''}
     <button class="btn secondary" style="margin-top:8px" onclick="signOut()">${tr('profile.signOut')}</button>
     <button class="btn danger-outline" style="margin-top:26px" onclick="deleteAccount()">${tr('profile.deleteAccount')}</button>
   </div>`;
+}
+
+function vReferral() {
+  const r = S.referral || {};
+  const code = r.code || '…';
+  const referrerBonus = r.referrer_bonus ?? 150;
+  const refereeBonus = r.referee_bonus ?? 100;
+  return vHeader(tr('referral.title')) + `
+  <div class="screen">
+    <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('profile')">← ${tr('common.back')}</button>
+    <div class="card" style="text-align:center;padding:24px">
+      <div style="font-size:42px">🎁</div>
+      <p class="hint" style="margin:8px 0 16px">${tr('referral.subtitle', { referrer: referrerBonus, referee: refereeBonus })}</p>
+      <div class="hint">${tr('referral.yourCode')}</div>
+      <div style="font-size:32px;font-weight:800;color:var(--gold);letter-spacing:6px;margin:6px 0">${esc(code)}</div>
+      <button class="btn" style="margin-top:10px" onclick="shareReferral()">${tr('referral.share')}</button>
+    </div>
+    <div style="display:flex;gap:10px">
+      <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${r.rewarded ?? 0}</div><div class="hint">${tr('referral.joined')}</div></div>
+      <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${r.pending ?? 0}</div><div class="hint">${tr('referral.pending')}</div></div>
+      <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${((r.rewarded ?? 0) * referrerBonus).toLocaleString()}</div><div class="hint">${tr('referral.earned')}</div></div>
+    </div>
+    <p class="hint" style="margin-top:14px;text-align:center">${tr('referral.note')}</p>
+  </div>`;
+}
+
+async function shareReferral() {
+  const code = S.referral?.code;
+  if (!code) return;
+  const msg = tr('referral.shareMessage', { code });
+  try {
+    if (navigator.share) await navigator.share({ text: msg });
+    else { await navigator.clipboard.writeText(code); alert(tr('referral.copied')); }
+  } catch (_) {}
 }
 
 function vHome() {
@@ -684,12 +727,12 @@ function setCType(t) { C.type = t; C.error = ''; C.ok = ''; render(); }
 function render() {
   const root = document.getElementById('app');
   if (!S.token) { root.innerHTML = vLogin(); return; }
-  const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin, buy: vBuy }[S.tab] || vEarn;
+  const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin, buy: vBuy, referral: vReferral }[S.tab] || vEarn;
   root.innerHTML = view() + vTabbar() + vModal();
 }
 
 // expose handlers used in inline HTML
-Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, buyCoins, buyCoinsCustom, updateCustomBuy,
+Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, S, buyCoins, buyCoinsCustom, updateCustomBuy, shareReferral,
   gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {

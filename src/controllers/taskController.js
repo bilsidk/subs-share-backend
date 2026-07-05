@@ -266,7 +266,10 @@ const verifyTask = async (req, res, next) => {
           return res.status(503).json({ error: 'Could not verify device security, please try again.', code: 'INTEGRITY_ERROR' });
         console.warn('[integrity] verify error (soft):', e.message);
       }
-    } else if (cfg.INTEGRITY_ENFORCE) {
+    } else if (cfg.INTEGRITY_ENFORCE && req.body.platform !== 'web') {
+      // Web can't produce a Play Integrity token — it's a separate (lower) trust tier,
+      // governed by the device/velocity guards instead. Only Android is hard-required
+      // to attest, so enforcing integrity never breaks the web client.
       return res.status(426).json({ error: 'Please update the app to continue earning.', code: 'INTEGRITY_REQUIRED' });
     }
 
