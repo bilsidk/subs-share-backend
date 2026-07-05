@@ -1,5 +1,13 @@
 const pool = require('../db/pool');
 const { OWNER_EMAIL } = require('../config');
+const referralService = require('../services/referralService');
+
+// GET /users/referral — the caller's code + how many referrals have rewarded.
+const getReferral = async (req, res, next) => {
+  try {
+    res.json(await referralService.getReferralInfo(req.userId));
+  } catch (err) { next(err); }
+};
 
 const getMe = async (req, res, next) => {
   try {
@@ -87,4 +95,4 @@ const deleteMe = async (req, res, next) => {
   finally { client.release(); }
 };
 
-module.exports = { getMe, deleteMe };
+module.exports = { getMe, deleteMe, getReferral };

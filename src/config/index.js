@@ -31,6 +31,11 @@ module.exports = {
 
   TIER: { OWNER: 1, PREMIUM: 2, USER: 3 },
 
+  // Referral bonuses — both paid only when the referee completes their first
+  // API-verified task (see referralService), so throwaway accounts earn nothing.
+  REFERRER_BONUS: 150,
+  REFEREE_BONUS: 100,
+
   MIN_SECONDS_BETWEEN_TASKS: 20,
   MAX_TASKS_PER_HOUR: 40,
   // Watch tasks can't be verified against a YouTube API, so cap how many a single

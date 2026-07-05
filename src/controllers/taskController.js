@@ -414,6 +414,12 @@ const verifyTask = async (req, res, next) => {
     if (device_id) await antiCheat.registerDevice(req.userId, device_id);
     pool.query('DELETE FROM task_starts WHERE user_id=$1 AND task_id=$2', [req.userId, taskId]).catch(() => {});
 
+    // Referral payout: only on a real API-verified task (never honor mode), after
+    // the device is registered so the self-referral device check is accurate.
+    if (verifyMethod === 'api') {
+      require('../services/referralService').rewardReferralIfPending(req.userId, device_id).catch(() => {});
+    }
+
     const bal = await pool.query('SELECT coins FROM users WHERE id=$1', [req.userId]);
     res.json({
       verified: true, method: verifyMethod, degraded,

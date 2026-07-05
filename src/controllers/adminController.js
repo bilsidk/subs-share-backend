@@ -152,6 +152,8 @@ const banUser = async (req, res, next) => {
       [email, reason || 'Banned by admin']
     );
     if (!r.rows.length) return res.status(404).json({ error: 'User not found or cannot be banned.' });
+    // Claw back any referral bonus this banned user triggered as a referee.
+    require('../services/referralService').reverseReferralForReferee(r.rows[0].id).catch(() => {});
     res.json({ ok: true, user: r.rows[0] });
   } catch (err) { next(err); }
 };

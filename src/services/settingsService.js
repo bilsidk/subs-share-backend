@@ -172,12 +172,17 @@ async function recordApiFailure(kind) {
   if (_failWindow.length >= FAIL_THRESHOLD) {
     const current = await getMode();
     if (current.mode !== 'degraded') {
-      // Confirm it's a real outage — probe from the server side
+      // Confirm it's a REAL outage via a server-side probe before dropping
+      // verification. If YouTube responds, the failures are user-side (expired/
+      // revoked tokens, or someone trying to force honor mode) — so STAY LIVE and
+      // reset the window. Only a confirmed YouTube outage degrades the app.
       const apiDown = !(await probeYouTubeApi());
-      const reason = apiDown
-        ? `Auto: ${_failWindow.length} API failures in 5m + server probe failed (last: ${kind})`
-        : `Auto: ${_failWindow.length} API failures in 5m — server probe OK (user-side issue?) (last: ${kind})`;
-
+      if (!apiDown) {
+        _failWindow = [];
+        console.warn(`[APP MODE] ${FAIL_THRESHOLD}+ verify failures in 5m, but YouTube probe is OK — staying LIVE (user-side/bad tokens, last: ${kind})`);
+        return;
+      }
+      const reason = `Auto: ${_failWindow.length} API failures in 5m + server probe confirmed YouTube is DOWN (last: ${kind})`;
       await setMode('degraded', reason);
       _startRecoveryTimer();
 

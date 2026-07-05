@@ -95,6 +95,16 @@ const googleSignIn = async (req, res, next) => {
       finally { bc.release(); }
     }
 
+    // Referral: give this user a code, and if they're new and entered a valid
+    // code, record the pending referral (coins pay out on their first verified task).
+    try {
+      const referralService = require('../services/referralService');
+      await referralService.ensureReferralCode(user.id);
+      if (isNew && req.body.referralCode) {
+        await referralService.applyReferralAtSignup(user.id, req.body.referralCode);
+      }
+    } catch (e) { console.error('[Auth] referral setup:', e.message); }
+
     // Auto-register YouTube channel
     if (ytAccessToken) {
       try {

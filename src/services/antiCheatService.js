@@ -103,6 +103,8 @@ async function penalizeReclaim(userId) {
        WHERE id = $1 AND is_banned = FALSE`,
       [userId]
     );
+    // Claw back any referral bonus this now-banned user triggered as a referee.
+    require('./referralService').reverseReferralForReferee(userId).catch(() => {});
     return { banned: true, reclaim_count, trust_score };
   }
   return { banned: false, reclaim_count, trust_score };

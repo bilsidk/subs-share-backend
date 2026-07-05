@@ -119,6 +119,22 @@ async function runMigration() {
       ON CONFLICT DO NOTHING`);
   } catch (e) { console.error('[migrate] earned_targets:', e.message); }
 
+  // 11. Referrals — a per-user code, who referred whom, and reward state. Both
+  //     bonuses pay out only on the referee's first verified task (referralService).
+  try {
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(12)`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by INTEGER`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code_uidx ON users (referral_code) WHERE referral_code IS NOT NULL`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS referrals (
+        referee_id  INTEGER PRIMARY KEY,
+        referrer_id INTEGER NOT NULL,
+        status      VARCHAR(20) NOT NULL DEFAULT 'pending',
+        created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+        rewarded_at TIMESTAMP
+      )`);
+  } catch (e) { console.error('[migrate] referrals:', e.message); }
+
   // 10. Google Play purchases — exactly-once coin crediting for in-app purchases.
   //     The purchase_token is unique per transaction; the PRIMARY KEY guarantees a
   //     replayed/retried verify can never double-credit.
@@ -134,6 +150,16 @@ async function runMigration() {
         created_at     TIMESTAMP NOT NULL DEFAULT NOW()
       )`);
   } catch (e) { console.error('[migrate] google_purchases:', e.message); }
+
+  // 11. Ledger floor — belt-and-suspenders invariant. Every deduction path already
+  //     clamps (GREATEST(0,…)) or is a guarded/locked update, so this can't fire in
+  //     normal operation; it exists so a future bug can never persist a negative
+  //     balance. Clamp any pre-existing negatives first so the constraint validates.
+  try {
+    await pool.query(`UPDATE users SET coins = 0 WHERE coins < 0`);
+    await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_coins_nonneg`);
+    await pool.query(`ALTER TABLE users ADD CONSTRAINT users_coins_nonneg CHECK (coins >= 0)`);
+  } catch (e) { console.error('[migrate] coins_nonneg:', e.message); }
 }
 
 module.exports = { runMigration };
