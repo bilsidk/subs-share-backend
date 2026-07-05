@@ -98,6 +98,8 @@ const createTask = async (req, res, next) => {
       return res.status(400).json({ error: 'channel_id required for subscribe tasks' });
     if (!slots || slots < 1)
       return res.status(400).json({ error: 'Slot count required' });
+    if (slots > 100000)
+      return res.status(400).json({ error: 'Slot count too large (max 100000 per campaign).' });
     if (!cfg.REWARDS[task_type])
       return res.status(400).json({ error: 'Invalid task_type' });
 
@@ -115,6 +117,10 @@ const createTask = async (req, res, next) => {
     let video_duration_sec = null;
     let taskReward = rewardMap[task_type] ?? cfg.REWARDS[task_type];
     let slotCost = taskReward + margin;
+    // like_comment can pay a comment bonus ON TOP of the reward when the comment is
+    // verified. The owner must fund that too, otherwise each verified comment pays out
+    // more than the slot cost (10 reward + 4 bonus = 14 vs a 13 charge) — minting coins.
+    if (task_type === 'like_comment') slotCost += (appSettings.comment_bonus ?? cfg.COMMENT_BONUS);
 
     if (task_type !== 'subscribe') {
       if (!target_video_url)
@@ -384,10 +390,16 @@ const verifyTask = async (req, res, next) => {
     const totalCoins = task.reward + bonusCoins;
 
     await dbc.query('BEGIN');
-    const lockRes = await dbc.query('SELECT remaining_slots FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE', [taskId]);
+    // Lock the row and re-read status INSIDE the transaction — a concurrent pause/
+    // cancel between the earlier pre-check and here must not slip through.
+    const lockRes = await dbc.query('SELECT remaining_slots, status FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE', [taskId]);
     if (!lockRes.rows.length) {
       await dbc.query('ROLLBACK');
       return res.status(409).json({ error: 'Someone just took the last slot — try another task!', code: 'CAMPAIGN_FULL' });
+    }
+    if (lockRes.rows[0].status !== 'active') {
+      await dbc.query('ROLLBACK');
+      return res.status(409).json({ error: 'Campaign is no longer available.', code: 'CAMPAIGN_UNAVAILABLE' });
     }
 
     // Authoritative once-per-task guard, backed by the UNIQUE(task_id,user_id)

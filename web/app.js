@@ -9,7 +9,7 @@ const YT_SCOPE = 'openid email profile https://www.googleapis.com/auth/youtube.r
 const COMPLETION_DELAY = 45; // server enforces the real value; this drives the UI countdown
 
 // Mirrors backend src/config — display estimates only, server is authoritative
-const SLOT_COSTS = { subscribe: 15, like: 9, like_comment: 13, subscribe_like: 20, watch: 7 };
+const SLOT_COSTS = { subscribe: 15, like: 9, like_comment: 17, subscribe_like: 20, watch: 7 };
 const REWARDS    = { subscribe: 12, like: 6,  like_comment: 10, subscribe_like: 17, watch: 4 };
 
 const TASK_TYPES = ['subscribe', 'like', 'like_comment', 'subscribe_like', 'watch'];
@@ -34,7 +34,14 @@ let countdownTimer = null;
 
 function deviceId() {
   let id = localStorage.getItem('device_id');
-  if (!id) { id = 'web_' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('device_id', id); }
+  if (!id) {
+    let rand;
+    if (crypto?.randomUUID) rand = crypto.randomUUID().replace(/-/g, '');
+    else if (crypto?.getRandomValues) rand = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
+    else rand = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    id = 'web_' + rand;
+    localStorage.setItem('device_id', id);
+  }
   return id;
 }
 
@@ -133,6 +140,19 @@ function signOut() {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// Escape a value going into a SINGLE-QUOTED JS string inside an inline HTML handler
+// (onclick="fn('VALUE')"). HTML entities are decoded before JS runs, so quotes must be
+// JS-escaped with a backslash (survives decoding); < > " & are still HTML-encoded so
+// the value can't break out of the attribute or inject a tag. esc() alone is unsafe here.
+function jsAttr(s) {
+  return String(s ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 // Returns a real YouTube URL or null. Never a relative/garbage value, so bad
 // campaign data can't send the user to a 404 on our own domain.
@@ -217,7 +237,7 @@ function closeModal() { S.modal = null; if (countdownTimer) clearInterval(countd
 function modalOpenYouTube() {
   const m = S.modal; if (!m) return;
   const url = taskUrl(m.task);
-  if (!url) { m.error = 'This campaign has an invalid link — try another task.'; render(); return; }
+  if (!url) { m.error = tr('modal.invalidLink'); render(); return; }
   window.open(url, '_blank', 'noopener');
   if (m.status === 'idle') {
     api.start(m.task.id);            // server records the real start time
@@ -262,7 +282,7 @@ async function modalVerify() {
       // No longer claimable — drop it from the feed and close out cleanly.
       S.tasks = S.tasks.filter(t => t.id !== m.task.id);
       m.status = 'done';
-      m.message = e.message || 'This task is no longer available.';
+      m.message = e.message || tr('modal.unavailable');
     } else {
       m.status = 'ready';
       m.error = e.data?.remaining ? tr('modal.waitMore', { s: e.data.remaining }) : e.message;
@@ -277,7 +297,7 @@ const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', creating
 async function addChannelWeb() {
   const url = (C.newChannelUrl || '').trim();
   C.error = ''; C.ok = '';
-  if (!url) { C.error = 'Paste a channel URL or @handle.'; return render(); }
+  if (!url) { C.error = tr('grow.errChannelUrl'); return render(); }
   C.addingChannel = true; render();
   try {
     const ch = await api.addChannel(url);
@@ -685,10 +705,10 @@ function vAdmin() {
       <div><b>${esc(u.name || u.email)}</b> <span style="color:var(--gold)">🔔 ${u.subscriber_count ?? 0} subs</span>
         <div class="hint">${esc(u.email)} · ${esc(u.role)} · 🪙${u.coins} · ${u.tasks_completed} done${u.is_banned ? ' · ⛔ banned' : ''}${u.youtube_channel_id ? ` · <a href="https://www.youtube.com/channel/${esc(u.youtube_channel_id)}" target="_blank" rel="noopener">channel ↗</a>` : ''}</div></div>
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-        ${u.is_banned ? `<button class="btn small secondary" onclick="adminBanUser('${esc(u.email)}',true)">Unban</button>`
-                      : `<button class="btn small danger-outline" onclick="adminBanUser('${esc(u.email)}',false)">Ban</button>`}
-        ${u.role === 'premium' ? `<button class="btn small secondary" onclick="adminPromoteUser('${esc(u.email)}','user')">↓ User</button>`
-                               : `<button class="btn small secondary" onclick="adminPromoteUser('${esc(u.email)}','premium')">↑ Premium</button>`}
+        ${u.is_banned ? `<button class="btn small secondary" onclick="adminBanUser('${jsAttr(u.email)}',true)">Unban</button>`
+                      : `<button class="btn small danger-outline" onclick="adminBanUser('${jsAttr(u.email)}',false)">Ban</button>`}
+        ${u.role === 'premium' ? `<button class="btn small secondary" onclick="adminPromoteUser('${jsAttr(u.email)}','user')">↓ User</button>`
+                               : `<button class="btn small secondary" onclick="adminPromoteUser('${jsAttr(u.email)}','premium')">↑ Premium</button>`}
       </div>
     </div>`).join('');
   return vHeader('🛠 Admin') + `

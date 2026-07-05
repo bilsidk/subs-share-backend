@@ -14,7 +14,7 @@ module.exports = {
   SLOT_COSTS: {
     subscribe:       15,
     like:            9,
-    like_comment:    13,
+    like_comment:    17,   // reward 10 + margin 3 + comment bonus 4 (owner funds the bonus)
     subscribe_like:  20,
     watch:           7,   // base for 1 min; +1 per extra minute
   },

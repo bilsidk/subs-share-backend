@@ -23,6 +23,27 @@ async function checkValid(c) {
   return true;
 }
 
+// Partial clawback: the like is still valid but the user deleted their comment after
+// claiming the +bonus. Pull back ONLY the bonus (keep the like credit), once.
+async function clawbackCommentBonus(c) {
+  const dbc = await pool.connect();
+  try {
+    await dbc.query('BEGIN');
+    const upd = await dbc.query(
+      `UPDATE completions SET comment_verified=FALSE, bonus_coins=0,
+              coins_awarded=GREATEST(0, coins_awarded-$2)
+       WHERE id=$1 AND comment_verified=TRUE RETURNING id`,
+      [c.id, c.bonus_coins]
+    );
+    if (upd.rows.length) {
+      await dbc.query('UPDATE users SET coins=GREATEST(0,coins-$1) WHERE id=$2', [c.bonus_coins, c.user_id]);
+      await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent','tx:comment_bonus_reclaimed')`, [c.user_id, c.bonus_coins]);
+    }
+    await dbc.query('COMMIT');
+  } catch (e) { await dbc.query('ROLLBACK'); console.error('[AUDIT] comment bonus clawback failed', c.id, e.message); }
+  finally { dbc.release(); }
+}
+
 async function reclaim(c) {
   const dbc = await pool.connect();
   try {
@@ -48,7 +69,7 @@ async function reclaim(c) {
 async function runPass(quick) {
   const delay = quick ? QUICK_DELAY_HOURS : DEEP_DELAY_HOURS;
   const due = await pool.query(
-    `SELECT id, user_id, task_type, target_channel_id, target_video_id, coins_awarded
+    `SELECT id, user_id, task_type, target_channel_id, target_video_id, coins_awarded, bonus_coins, comment_verified
      FROM completions
      WHERE ((verify_method='api' AND verify_status='verified') OR verify_status='pending')
        AND audit_count<$1
@@ -74,6 +95,14 @@ async function runPass(quick) {
       // API-verified are treated as valid here (bounded by the daily watch cap).
       await pool.query(`UPDATE completions SET last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE,
                         verify_status=CASE WHEN verify_status='pending' THEN 'verified' ELSE verify_status END WHERE id=$1`, [c.id]);
+      // The like is still valid, but if this was a like_comment that earned the comment
+      // bonus, make sure the comment is still there — otherwise claw back just the bonus.
+      if (c.task_type === 'like_comment' && c.comment_verified && c.bonus_coins > 0) {
+        try {
+          const cr = await youtubeService.verifyComment(c.user_id, c.target_video_id);
+          if (cr && !cr.found) await clawbackCommentBonus(c);
+        } catch (_) { /* comment re-check is best-effort */ }
+      }
     } else {
       reclaimed++;
       await reclaim(c);

@@ -10,7 +10,9 @@ const crypto = require('crypto');
 const { google } = require('googleapis');
 const cfg = require('../config');
 
-const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+// Derive a DISTINCT key from JWT_SECRET so the nonce HMAC can't be used to attack the
+// JWT signing key (key separation). Still requires JWT_SECRET to be set in production.
+const SECRET = (process.env.JWT_SECRET || 'dev-secret-change-me') + ':integrity-nonce-v1';
 const NONCE_TTL_MS = 5 * 60 * 1000; // token must be produced within 5 min of the nonce
 
 function b64url(buf) {

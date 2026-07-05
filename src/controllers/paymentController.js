@@ -26,7 +26,7 @@ async function getTiers(req, res) {
     slot_costs: {
       subscribe:      (s.coins_subscribe      ?? 12) + (s.house_margin ?? 3),
       like:           (s.coins_like           ?? 6)  + (s.house_margin ?? 3),
-      like_comment:   (s.coins_like_comment   ?? 10) + (s.house_margin ?? 3),
+      like_comment:   (s.coins_like_comment   ?? 10) + (s.house_margin ?? 3) + (s.comment_bonus ?? 4),
       subscribe_like: (s.coins_subscribe_like ?? 17) + (s.house_margin ?? 3),
       watch:          (s.coins_watch          ?? 4)  + (s.house_margin ?? 3),
     },
@@ -62,7 +62,10 @@ async function createCheckout(req, res, next) {
     const bonus = Math.floor(tier.coins * tier.bonus_pct / 100);
     const total_coins = tier.coins + bonus;
 
-    const apiUrl = process.env.API_URL || `https://${req.get('host')}`;
+    // Never derive the IPN callback from the client-supplied Host header (spoofable —
+    // an attacker could redirect payment notifications). Use the configured API_URL,
+    // falling back to the known production host.
+    const apiUrl = process.env.API_URL || 'https://subs-share-backend-production.up.railway.app';
     const appUrl = resolveReturnBase(req.body.return_url) || process.env.APP_URL || 'https://app.viralboostnow.com';
 
     const invoice = await createInvoice({

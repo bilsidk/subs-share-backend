@@ -38,15 +38,23 @@ async function createInvoice({ price_amount, order_id, order_description, ipn_ca
   return res.json();
 }
 
+// NowPayments' canonical signing: keys sorted RECURSIVELY (at every level), null
+// fields kept. Object.keys().sort() as a replacer only sorts the top level and drops
+// nested keys, so use a recursive sort instead. Byte-identical to the old code for
+// flat payloads (the normal case), but correct if a payload ever nests.
+function sortedStringify(v) {
+  if (Array.isArray(v)) return '[' + v.map(sortedStringify).join(',') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + sortedStringify(v[k])).join(',') + '}';
+  }
+  return JSON.stringify(v);
+}
+
 function verifyIPN(body, signature) {
   const secret = process.env.NOWPAYMENTS_IPN_SECRET;
   if (!secret) throw new Error('NOWPAYMENTS_IPN_SECRET not set');
   if (!signature || typeof signature !== 'string') return false;
-  // Must reproduce NowPayments' signing byte-for-byte: JSON with top-level keys
-  // sorted and null fields KEPT (their canonical method). The previous version
-  // stripped nulls, so any IPN carrying a null field (common on early statuses)
-  // failed verification and the payment never credited.
-  const data = JSON.stringify(body, Object.keys(body).sort());
+  const data = sortedStringify(body);
   const digest = crypto.createHmac('sha512', secret).update(data).digest('hex');
   // Constant-time compare to avoid leaking the signature via response timing.
   const a = Buffer.from(digest);
