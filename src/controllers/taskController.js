@@ -2,7 +2,15 @@ const pool = require('../db/pool');
 const youtubeService = require('../services/youtubeService');
 const settings       = require('../services/settingsService');
 const antiCheat      = require('../services/antiCheatService');
+const integrity      = require('../services/integrityService');
 const cfg            = require('../config');
+
+// GET /tasks/integrity-nonce — issues a short-lived nonce for the Play Integrity
+// token request. The client requests a Google-signed token bound to this nonce and
+// sends it back on /verify.
+const getIntegrityNonce = async (req, res) => {
+  res.json({ nonce: integrity.issueNonce(req.userId) });
+};
 
 const VERIFIABLE_SUB  = new Set(['subscribe', 'subscribe_like']);
 const VERIFIABLE_LIKE = new Set(['like', 'like_comment', 'subscribe_like']);
@@ -241,6 +249,27 @@ const verifyTask = async (req, res, next) => {
       await antiCheat.assertDeviceOk(req.userId, device_id);
     } catch (e) { return res.status(e.status||403).json({ error: e.message, code: e.code }); }
 
+    // Play Integrity gate. SOFT by default: verify a token if the app sent one, but
+    // only reject when INTEGRITY_ENFORCE=true — so existing clients that don't send a
+    // token keep working until enforcement is switched on server-side.
+    const integrityToken = req.body.integrity_token;
+    if (integrityToken) {
+      try {
+        const v = await integrity.verifyIntegrity(integrityToken, req.userId);
+        if (!v.ok) {
+          if (cfg.INTEGRITY_ENFORCE)
+            return res.status(403).json({ error: 'This device failed a security check.', code: 'INTEGRITY_FAILED', reason: v.reason });
+          console.warn(`[integrity] soft-fail user=${req.userId} reason=${v.reason} verdicts=${JSON.stringify(v.verdicts)}`);
+        }
+      } catch (e) {
+        if (cfg.INTEGRITY_ENFORCE)
+          return res.status(503).json({ error: 'Could not verify device security, please try again.', code: 'INTEGRITY_ERROR' });
+        console.warn('[integrity] verify error (soft):', e.message);
+      }
+    } else if (cfg.INTEGRITY_ENFORCE) {
+      return res.status(426).json({ error: 'Please update the app to continue earning.', code: 'INTEGRITY_REQUIRED' });
+    }
+
     const appSettings = await settings.getSettings();
     const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
 
@@ -470,4 +499,4 @@ const startTask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask };
+module.exports = { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask, getIntegrityNonce };

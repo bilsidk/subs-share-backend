@@ -50,6 +50,11 @@ module.exports = {
   // exactly what you create in Play Console. Coin amounts live here so they can be
   // changed without an app update. ANDROID_PACKAGE is the app's applicationId.
   ANDROID_PACKAGE: 'com.subsshare',
+  // Play Integrity: when false (default) tokens are checked-if-present but never
+  // block earning — safe while old clients are still out there. Flip to true via a
+  // Railway env var (INTEGRITY_ENFORCE=true) once v8+ adoption is high to HARD-require
+  // a passing device+app verdict on the earn path. No app update needed to flip.
+  INTEGRITY_ENFORCE: process.env.INTEGRITY_ENFORCE === 'true',
   // Each pack: coins = total credited (base + bonus). base/bonus are for display
   // ("1,400 + 100 bonus"). popular/best drive the badges. Coin totals here must
   // match the value you advertise for each Play Console product ID.
