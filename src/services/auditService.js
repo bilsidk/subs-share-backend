@@ -49,17 +49,34 @@ async function reclaim(c) {
   try {
     await dbc.query('BEGIN');
     await dbc.query(`UPDATE completions SET verify_status='reclaimed', last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE WHERE id=$1`, [c.id]);
+    // Lock the balance so we can tell whether the reward was fully recovered.
+    const balRow = await dbc.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [c.user_id]);
+    const before = balRow.rows.length ? Number(balRow.rows[0].coins) : 0;
+    const fullyRecovered = before >= c.coins_awarded;
     await dbc.query('UPDATE users SET coins=GREATEST(0,coins-$1) WHERE id=$2', [c.coins_awarded, c.user_id]);
-    await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`, [c.user_id, c.coins_awarded, `tx:coins_reclaimed|type:${c.task_type}`]);
-    // Release the earned-target ledger entries for this completion. Otherwise a
-    // reclaim (including a false-positive from a transient API blip) would
-    // permanently bar the user from ever legitimately earning that channel/video
-    // again — the feed hides it and the verify-time ledger insert would reject it.
-    const relKeys = [];
-    if ((c.task_type === 'subscribe' || c.task_type === 'subscribe_like') && c.target_channel_id) relKeys.push('sub:' + c.target_channel_id);
-    if ((c.task_type === 'like' || c.task_type === 'like_comment' || c.task_type === 'subscribe_like') && c.target_video_id) relKeys.push('like:' + c.target_video_id);
-    if (c.task_type === 'watch' && c.target_video_id) relKeys.push('watch:' + c.target_video_id);
-    if (relKeys.length) await dbc.query('DELETE FROM earned_targets WHERE user_id=$1 AND target_key = ANY($2)', [c.user_id, relKeys]);
+    await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent',$3)`, [c.user_id, Math.min(before, c.coins_awarded), `tx:coins_reclaimed|type:${c.task_type}`]);
+    // Only lift the per-target ledger bar when the whole reward was clawed back (a
+    // genuine reversal / transient false-positive). If the user had already SPENT the
+    // coins — GREATEST(0,…) can't recover them — keep the target barred; otherwise they
+    // could earn → spend → get reclaimed → re-earn the same target for net profit.
+    if (fullyRecovered) {
+      const relKeys = [];
+      if ((c.task_type === 'subscribe' || c.task_type === 'subscribe_like') && c.target_channel_id) relKeys.push('sub:' + c.target_channel_id);
+      if ((c.task_type === 'like' || c.task_type === 'like_comment' || c.task_type === 'subscribe_like') && c.target_video_id) relKeys.push('like:' + c.target_video_id);
+      if (c.task_type === 'watch' && c.target_video_id) relKeys.push('watch:' + c.target_video_id);
+      if (relKeys.length) await dbc.query('DELETE FROM earned_targets WHERE user_id=$1 AND target_key = ANY($2)', [c.user_id, relKeys]);
+    }
+    // Make the campaign owner whole: the engagement they paid for was undone, so
+    // return the slot to their campaign (and re-open it if it had filled up) so a
+    // real earner can replace it. Cancelled campaigns are left cancelled.
+    if (c.task_id) {
+      await dbc.query(
+        `UPDATE tasks SET remaining_slots = remaining_slots + 1,
+                status = CASE WHEN status = 'completed' THEN 'active' ELSE status END
+         WHERE id = $1 AND status <> 'cancelled'`,
+        [c.task_id]
+      );
+    }
     await dbc.query('COMMIT');
   } catch (e) { await dbc.query('ROLLBACK'); console.error('[AUDIT] reclaim failed', c.id, e.message); }
   finally { dbc.release(); }
@@ -69,7 +86,7 @@ async function reclaim(c) {
 async function runPass(quick) {
   const delay = quick ? QUICK_DELAY_HOURS : DEEP_DELAY_HOURS;
   const due = await pool.query(
-    `SELECT id, user_id, task_type, target_channel_id, target_video_id, coins_awarded, bonus_coins, comment_verified
+    `SELECT id, task_id, user_id, task_type, target_channel_id, target_video_id, coins_awarded, bonus_coins, comment_verified
      FROM completions
      WHERE ((verify_method='api' AND verify_status='verified') OR verify_status='pending')
        AND audit_count<$1

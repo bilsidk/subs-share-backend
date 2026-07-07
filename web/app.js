@@ -116,6 +116,11 @@ function signIn() {
     ux_mode: 'popup',
     callback: async (resp) => {
       if (!resp.code) { S.loginError = tr('login.cancelled'); return render(); }
+      // The YouTube permission is optional on Google's screen (unchecked by default).
+      // If the granted scopes don't include it, guide the user instead of failing later.
+      if (resp.scope && !resp.scope.includes('youtube.readonly')) {
+        S.loginError = tr('login.permissionMsg'); return render();
+      }
       S.busy = true; render();
       try {
         const data = await api.signIn(resp.code, referralCode);
@@ -124,7 +129,13 @@ function signIn() {
         S.busy = false;
         await loadTab('home');
       } catch (e) {
-        S.busy = false; S.loginError = e.message; render();
+        S.busy = false;
+        const code = e.code || (e.data && e.data.code);
+        const em = (e.message || '');
+        if (code === 'NO_YOUTUBE_ACCESS' || /youtube/i.test(em)) S.loginError = tr('login.permissionMsg');
+        else if (/network|failed to fetch|timed out|connection/i.test(em)) S.loginError = tr('login.networkMsg');
+        else S.loginError = tr('login.genericMsg');
+        render();
       }
     },
     error_callback: () => { S.busy = false; S.loginError = tr('login.closed'); render(); },
@@ -153,6 +164,42 @@ function jsAttr(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ── themed dialogs (replace native alert()/confirm() so nothing looks unstyled) ──
+let _dlgStyled = false;
+function _ensureDlgStyles() {
+  if (_dlgStyled) return; _dlgStyled = true;
+  const st = document.createElement('style');
+  st.textContent = `
+  .dlg-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px}
+  .dlg-card{width:100%;max-width:380px;background:var(--card,#14141c);border:1px solid var(--border,#2a2a38);border-radius:20px;padding:22px}
+  .dlg-title{font-size:17px;font-weight:800;color:var(--text,#fff);margin-bottom:8px;text-align:center}
+  .dlg-msg{font-size:14px;color:var(--text2,#b9b9c6);line-height:1.5;text-align:center;white-space:pre-line}
+  .dlg-btns{display:flex;gap:10px;margin-top:18px}
+  .dlg-btn{flex:1;padding:12px;border-radius:12px;font-weight:800;font-size:14px;border:none;cursor:pointer}
+  .dlg-confirm{background:var(--primary,#6C63FF);color:#fff}
+  .dlg-cancel{background:transparent;border:1px solid var(--border,#2a2a38);color:var(--text2,#b9b9c6)}`;
+  document.head.appendChild(st);
+}
+function _dlg({ message, title, confirmText, cancelText, cancel }) {
+  _ensureDlgStyles();
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'dlg-overlay';
+    overlay.innerHTML = `<div class="dlg-card">${title ? `<div class="dlg-title">${esc(title)}</div>` : ''}
+      <div class="dlg-msg">${esc(message)}</div>
+      <div class="dlg-btns">${cancel ? `<button class="dlg-btn dlg-cancel"></button>` : ''}<button class="dlg-btn dlg-confirm"></button></div></div>`;
+    overlay.querySelector('.dlg-confirm').textContent = confirmText;
+    const c = overlay.querySelector('.dlg-cancel'); if (c) c.textContent = cancelText;
+    const close = (v) => { overlay.remove(); resolve(v); };
+    overlay.querySelector('.dlg-confirm').onclick = () => close(true);
+    if (c) c.onclick = () => close(false);
+    overlay.onclick = (e) => { if (e.target === overlay) close(false); };
+    document.body.appendChild(overlay);
+  });
+}
+function showAlert(message, title) { return _dlg({ message, title, confirmText: tr('common.ok'), cancel: false }); }
+function showConfirm(message, title) { return _dlg({ message, title, confirmText: tr('common.confirm'), cancelText: tr('common.cancel'), cancel: true }); }
 
 // Returns a real YouTube URL or null. Never a relative/garbage value, so bad
 // campaign data can't send the user to a 404 on our own domain.
@@ -229,10 +276,194 @@ function openTask(taskId) {
   // avoids injecting server data into an inline handler attribute.
   const task = S.tasks.find(t => String(t.id) === String(taskId));
   if (!task) return;
+  // Watch tasks play inside the app via the embedded YouTube player (timer bound to
+  // real playback). Everything else uses the open-YouTube modal.
+  if (task.task_type === 'watch') { openWatchPlayer(task); return; }
   S.modal = { task, status: 'idle', countdown: 0, startedAt: null, error: '', message: '' };
   render();
 }
 function closeModal() { S.modal = null; if (countdownTimer) clearInterval(countdownTimer); render(); }
+
+// ── in-app watch player (web) ───────────────────────────────────────────────
+// Self-contained overlay appended to <body> so the app's innerHTML re-renders can't
+// destroy the running YouTube iframe. Timer counts ONLY real playing seconds (and
+// pauses when the tab is hidden). The server enforces the same watch-time floor.
+const WP = { queue: [], idx: 0, watched: 0, required: 60, playing: false, player: null, timer: null, claimed: false, el: null, auto: false, autoCount: 0, claiming: false };
+const WP_PRESENCE_EVERY = 4; // ask "still watching?" every N auto-advanced videos
+let _ytReady = false, _ytCbs = [];
+function loadYT(cb) {
+  if (window.YT && window.YT.Player) return cb();
+  _ytCbs.push(cb);
+  if (!document.getElementById('yt-api')) {
+    const s = document.createElement('script'); s.id = 'yt-api'; s.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(s);
+    window.onYouTubeIframeAPIReady = () => { _ytReady = true; const cbs = _ytCbs.slice(); _ytCbs = []; cbs.forEach(f => f()); };
+  }
+}
+function wpStyles() {
+  if (document.getElementById('wp-style')) return;
+  const st = document.createElement('style'); st.id = 'wp-style';
+  st.textContent = `
+  .wp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9998;display:flex;align-items:center;justify-content:center;padding:16px}
+  .wp-card{width:100%;max-width:640px;background:var(--card,#14141c);border:1px solid var(--border,#2a2a38);border-radius:18px;overflow:hidden}
+  .wp-head{display:flex;align-items:center;gap:10px;padding:12px 14px}
+  .wp-close{width:32px;height:32px;border-radius:16px;background:var(--bg,#0b0b12);border:1px solid var(--border,#2a2a38);color:var(--text,#fff);cursor:pointer;font-weight:700}
+  .wp-title{flex:1;font-weight:700;color:var(--text,#fff);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wp-reward{background:rgba(245,196,81,.15);color:var(--gold,#f5c451);padding:4px 10px;border-radius:10px;font-weight:800;font-size:13px}
+  .wp-player{width:100%;aspect-ratio:16/9;background:#000}
+  .wp-player iframe{width:100%;height:100%}
+  .wp-embed-err{color:var(--text2,#b9b9c6);padding:24px;text-align:center;font-size:14px}
+  .wp-body{padding:16px;display:flex;flex-direction:column;gap:10px}
+  .wp-track{height:10px;border-radius:99px;background:var(--bg,#0b0b12);overflow:hidden;border:1px solid var(--border,#2a2a38)}
+  .wp-fill{height:100%;width:0;background:var(--primary,#6C63FF);transition:width .3s}
+  .wp-time{font-size:13px;color:var(--text2,#b9b9c6);text-align:center;font-weight:600}
+  .wp-status{font-size:16px;font-weight:800;color:var(--text,#fff);text-align:center}
+  .wp-primary{padding:14px;border-radius:12px;border:none;background:var(--primary,#6C63FF);color:#fff;font-weight:800;font-size:15px;cursor:pointer}
+  .wp-primary:disabled{opacity:.5;cursor:default}
+  .wp-skip{padding:8px;background:none;border:none;color:var(--text2,#b9b9c6);font-weight:600;font-size:13px;cursor:pointer}
+  .wp-auto{padding:8px;background:none;border:none;color:var(--text2,#b9b9c6);font-weight:700;font-size:14px;cursor:pointer}
+  .wp-sw{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
+  .wp-sw-card{width:100%;max-width:360px;background:var(--card,#14141c);border:1px solid var(--border,#2a2a38);border-radius:20px;padding:24px;text-align:center;display:flex;flex-direction:column;gap:10px;align-items:center}
+  .wp-sw-title{font-size:18px;font-weight:800;color:var(--text,#fff)}
+  .wp-sw-msg{font-size:14px;color:var(--text2,#b9b9c6);line-height:1.5}
+  .wp-sw-btn{margin-top:6px;padding:12px 20px;border:none;border-radius:12px;background:var(--primary,#6C63FF);color:#fff;font-weight:800;font-size:14px;cursor:pointer;width:100%}`;
+  document.head.appendChild(st);
+}
+function wpCurrent() { return WP.queue[WP.idx] || null; }
+function wpMMSS(s) { return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+async function openWatchPlayer(task) {
+  if (WP.opening) return;           // guard against a double-tap race during the await
+  WP.opening = true;
+  wpStyles();
+  let list = [];
+  try { list = await api.tasks('watch'); } catch (_) {}
+  list = (list || []).filter(x => !x.already_completed);
+  WP.queue = [task, ...list.filter(x => x.id !== task.id)];
+  WP.idx = 0;
+  if (!WP.el) {
+    const el = document.createElement('div'); el.className = 'wp-overlay';
+    el.innerHTML = `<div class="wp-card"><div class="wp-head"><button class="wp-close">✕</button><div class="wp-title"></div><div class="wp-reward"></div></div>
+      <div class="wp-player"><div id="wp-yt"></div></div>
+      <div class="wp-body"><div class="wp-track"><div class="wp-fill"></div></div><div class="wp-time"></div><div class="wp-status"></div>
+      <button class="wp-primary"></button><button class="wp-skip"></button><button class="wp-auto"></button></div></div>`;
+    document.body.appendChild(el); WP.el = el;
+    el.querySelector('.wp-close').onclick = wpClose;
+    el.querySelector('.wp-primary').onclick = () => { if (WP.claimed) wpNext(); else wpClaim(); };
+    el.querySelector('.wp-skip').onclick = wpNext;
+    el.querySelector('.wp-auto').onclick = () => {
+      WP.auto = !WP.auto; wpUpdate();
+      if (WP.auto && WP.watched >= WP.required && !WP.claimed && !WP.claiming) wpClaim();
+    };
+  }
+  wpLoad();
+  WP.opening = false;
+}
+function wpLoad() {
+  const t = wpCurrent(); if (!t) return wpClose();
+  WP.watched = 0; WP.claimed = false; WP.playing = false;
+  if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+  WP.required = Math.max(1, (parseInt(t.watch_minutes, 10) || 1) * 60);
+  api.start(t.id);
+  // Reset the primary button back to the claim/next delegate — a previous video's
+  // embed-error handler may have hijacked it to "open on YouTube".
+  WP.el.querySelector('.wp-primary').onclick = () => { if (WP.claimed) wpNext(); else wpClaim(); };
+  WP.el.querySelector('.wp-title').textContent = t.channel_name || t.owner_name || '';
+  WP.el.querySelector('.wp-reward').textContent = '+' + t.reward + ' 🪙';
+  WP.el.querySelector('.wp-player').innerHTML = '<div id="wp-yt"></div>';
+  loadYT(() => {
+    if (!WP.el) return;
+    WP.player = new YT.Player('wp-yt', {
+      videoId: t.target_video_id,
+      playerVars: { autoplay: 1, rel: 0, modestbranding: 1, playsinline: 1 },
+      events: {
+        onStateChange: (e) => wpSetPlaying(e.data === 1), // 1 = PLAYING
+        onError: () => wpEmbedError(),
+      },
+    });
+  });
+  wpUpdate();
+}
+function wpSetPlaying(p) {
+  WP.playing = p;
+  if (p && !WP.timer && !WP.claimed) {
+    WP.timer = setInterval(() => {
+      if (document.hidden) return;
+      WP.watched = Math.min(WP.required, WP.watched + 1);
+      if (WP.watched >= WP.required && WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+      wpUpdate();
+    }, 1000);
+  } else if (!p && WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+  wpUpdate();
+}
+function wpUpdate() {
+  if (!WP.el) return;
+  const done = WP.watched >= WP.required;
+  WP.el.querySelector('.wp-fill').style.width = Math.min(100, Math.round(WP.watched / WP.required * 100)) + '%';
+  WP.el.querySelector('.wp-time').textContent = wpMMSS(WP.watched) + ' / ' + wpMMSS(WP.required);
+  WP.el.querySelector('.wp-status').textContent = WP.claimed ? tr('watch.claimed') : done ? tr('watch.done') : WP.playing ? tr('watch.keepWatching') : tr('watch.paused');
+  const primary = WP.el.querySelector('.wp-primary');
+  if (WP.claimed) { primary.textContent = WP.idx < WP.queue.length - 1 ? tr('watch.nextVideo') : tr('watch.finish'); primary.disabled = false; }
+  else { primary.textContent = done ? tr('watch.claim') : tr('watch.watchMore', { s: Math.max(0, WP.required - WP.watched) }); primary.disabled = !done; }
+  const skip = WP.el.querySelector('.wp-skip');
+  skip.style.display = (WP.queue.length > 1 && !WP.claimed) ? 'block' : 'none';
+  skip.textContent = tr('watch.skipToNext');
+  const auto = WP.el.querySelector('.wp-auto');
+  if (auto) { auto.textContent = (WP.auto ? '☑ ' : '☐ ') + tr('watch.autoplay'); auto.style.display = WP.claimed ? 'none' : 'block'; }
+  // Auto-claim the instant the full required watch time is reached.
+  if (WP.auto && done && !WP.claimed && !WP.claiming) wpClaim();
+}
+async function wpClaim() {
+  const t = wpCurrent(); if (!t || WP.watched < WP.required || WP.claimed || WP.claiming) return;
+  WP.claiming = true;
+  try {
+    const res = await api.verify(t.id, null);
+    WP.claimed = true; WP.claiming = false;
+    api.me().then(d => { S.user = d; }).catch(() => {});
+    S.tasks = (S.tasks || []).filter(x => x.id !== t.id);
+    wpUpdate();
+    if (WP.auto) {
+      WP.autoCount++;
+      if (WP.autoCount >= WP_PRESENCE_EVERY) wpStillWatching();          // periodic presence check
+      else setTimeout(() => { if (WP.el && WP.auto) wpNext(); }, 1500);  // auto-advance
+    } else {
+      showAlert(tr('watch.claimedMsg', { coins: res.total_coins ?? res.coins_earned ?? t.reward }), tr('watch.claimedTitle'));
+    }
+  } catch (e) { WP.claiming = false; showAlert(e.message || tr('common.requestFailed')); }
+}
+function wpStillWatching() {
+  wpStyles();
+  const ov = document.createElement('div'); ov.className = 'wp-sw'; ov.id = 'wp-sw';
+  ov.innerHTML = `<div class="wp-sw-card"><div style="font-size:40px">👀</div><div class="wp-sw-title"></div><div class="wp-sw-msg"></div><button class="wp-sw-btn"></button></div>`;
+  ov.querySelector('.wp-sw-title').textContent = tr('watch.stillTitle');
+  ov.querySelector('.wp-sw-msg').textContent = tr('watch.stillMsg');
+  const btn = ov.querySelector('.wp-sw-btn'); btn.textContent = tr('watch.continue');
+  btn.onclick = () => { ov.remove(); WP.autoCount = 0; if (WP.el) wpNext(); };
+  document.body.appendChild(ov);
+}
+function wpNext() {
+  if (WP.idx < WP.queue.length - 1) { WP.idx++; wpLoad(); } else wpClose();
+}
+function wpEmbedError() {
+  if (!WP.el) return;
+  if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+  WP.el.querySelector('.wp-player').innerHTML = `<div class="wp-embed-err">${esc(tr('watch.embedMsg'))}</div>`;
+  const primary = WP.el.querySelector('.wp-primary');
+  primary.textContent = tr('watch.openYoutube'); primary.disabled = false;
+  primary.onclick = () => { const t = wpCurrent(); if (t) window.open('https://www.youtube.com/watch?v=' + t.target_video_id, '_blank', 'noopener'); };
+  // Always offer a way out of an un-embeddable video.
+  const skip = WP.el.querySelector('.wp-skip');
+  skip.style.display = 'block';
+  skip.textContent = WP.idx < WP.queue.length - 1 ? tr('watch.skipToNext') : tr('watch.finish');
+}
+function wpClose() {
+  if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+  if (WP.player && WP.player.destroy) { try { WP.player.destroy(); } catch (_) {} }
+  WP.player = null;
+  const sw = document.getElementById('wp-sw'); if (sw) sw.remove();
+  WP.claiming = false; WP.autoCount = 0;
+  if (WP.el) { WP.el.remove(); WP.el = null; }
+  loadTab('earn');
+}
 
 function modalOpenYouTube() {
   const m = S.modal; if (!m) return;
@@ -336,20 +567,20 @@ async function createCampaign() {
 }
 
 async function campaignAction(id, action) {
-  if (action === 'cancel' && !confirm(tr('grow.cancelConfirm'))) return;
+  if (action === 'cancel' && !(await showConfirm(tr('grow.cancelConfirm')))) return;
   try {
     if (action === 'pause') await api.pause(id);
     else if (action === 'resume') await api.resume(id);
     else await api.cancel(id);
     S.myTasks = await api.myTasks();
     api.me().then(d => { S.user = d; render(); }).catch(() => {});
-  } catch (e) { alert(e.message); }
+  } catch (e) { showAlert(e.message); }
   render();
 }
 
 async function deleteAccount() {
-  if (!confirm(tr('profile.deleteConfirm'))) return;
-  try { await api.deleteAccount(); signOut(); } catch (e) { alert(e.message); }
+  if (!(await showConfirm(tr('profile.deleteConfirm')))) return;
+  try { await api.deleteAccount(); signOut(); } catch (e) { showAlert(e.message); }
 }
 
 // ── buy coins ─────────────────────────────────────────────────────────────────
@@ -434,11 +665,11 @@ async function adminTopCreators() {
 }
 
 async function adminBanUser(email, unban) {
-  if (!unban && !confirm(`Ban ${email}?`)) return;
-  try { await api.adminBan(email, unban); await adminSearchUsers(); } catch (e) { alert(e.message); }
+  if (!unban && !(await showConfirm(`Ban ${email}?`))) return;
+  try { await api.adminBan(email, unban); await adminSearchUsers(); } catch (e) { showAlert(e.message); }
 }
 async function adminPromoteUser(email, role) {
-  try { await api.adminPromote(email, role); await adminSearchUsers(); } catch (e) { alert(e.message); }
+  try { await api.adminPromote(email, role); await adminSearchUsers(); } catch (e) { showAlert(e.message); }
 }
 
 // ── views ─────────────────────────────────────────────────────────────────────
@@ -505,6 +736,7 @@ function vModal() {
       <h2>${TASK_ICON[t.task_type] || ''} ${taskLabel(t.task_type)} — +${t.reward} 🪙</h2>
       <div class="meta" style="color:var(--text2);font-size:13px">${esc(t.channel_name || t.owner_name)}</div>
       <div class="steps">${tr('steps.' + t.task_type, { min: t.watch_minutes })}</div>
+      ${m.status !== 'done' ? `<div style="font-size:12px;color:var(--gold);background:rgba(245,196,81,0.1);border-radius:10px;padding:10px;margin:10px 0;text-align:left;line-height:1.5">${tr('modal.clawbackWarning')}</div>` : ''}
       ${action}
     </div>
   </div>`;
@@ -645,6 +877,7 @@ function vReferral() {
       <div class="hint">${tr('referral.yourCode')}</div>
       <div style="font-size:32px;font-weight:800;color:var(--gold);letter-spacing:6px;margin:6px 0">${esc(code)}</div>
       ${r.code ? `<div class="hint" style="margin-top:6px;word-break:break-all;opacity:.8">${esc(referralLink(code))}</div>` : ''}
+      <div style="margin-top:12px;font-size:12.5px;color:var(--gold);background:rgba(245,196,81,.1);border-radius:10px;padding:10px;line-height:1.5">${tr('referral.condition')}</div>
       <button class="btn" style="margin-top:10px" onclick="shareReferral()">${tr('referral.share')}</button>
     </div>
     <div style="display:flex;gap:10px">
@@ -665,7 +898,7 @@ async function shareReferral() {
   const msg = tr('referral.shareMessage', { code }) + '\n' + link;
   try {
     if (navigator.share) await navigator.share({ text: msg });
-    else { await navigator.clipboard.writeText(link); alert(tr('referral.copied')); }
+    else { await navigator.clipboard.writeText(link); showAlert(tr('referral.copied')); }
   } catch (_) {}
 }
 

@@ -68,6 +68,18 @@ async function rewardReferralIfPending(refereeId, deviceId) {
     if (!pend.rows.length) { await dbc.query('ROLLBACK'); return; }
     const referrerId = pend.rows[0].referrer_id;
 
+    // Require the referee to be genuinely active before paying the 250-coin referral:
+    // account at least N hours old AND at least M verified tasks. Stay pending and retry
+    // on their later verified tasks until they cross both thresholds.
+    const act = await dbc.query(
+      `SELECT
+         (SELECT COUNT(*) FROM completions WHERE user_id=$1 AND verify_status='verified') AS tasks,
+         ((SELECT created_at FROM users WHERE id=$1) <= NOW() - ($2 * INTERVAL '1 hour')) AS aged`,
+      [refereeId, cfg.REFERRAL_MIN_REFEREE_HOURS || 24]
+    );
+    const enoughTasks = parseInt(act.rows[0].tasks, 10) >= (cfg.REFERRAL_MIN_REFEREE_TASKS || 5);
+    if (!enoughTasks || !act.rows[0].aged) { await dbc.query('ROLLBACK'); return; }
+
     const rb = await dbc.query('SELECT is_banned, device_id FROM users WHERE id=$1', [referrerId]);
     if (!rb.rows.length || rb.rows[0].is_banned) {
       await dbc.query(`UPDATE referrals SET status='blocked' WHERE referee_id=$1`, [refereeId]);

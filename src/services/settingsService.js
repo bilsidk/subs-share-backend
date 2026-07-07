@@ -61,7 +61,7 @@ async function probeYouTubeApi() {
     );
     if (!res.rows.length) {
       // No tokens — just ping the YouTube API endpoint
-      const youtube = google.youtube({ version: 'v3', auth: process.env.GOOGLE_API_KEY });
+      const youtube = google.youtube({ version: 'v3', auth: process.env.YOUTUBE_API_KEY });
       await youtube.videos.list({ part: ['id'], id: ['dQw4w9WgXcQ'], maxResults: 1 });
       return true;
     }

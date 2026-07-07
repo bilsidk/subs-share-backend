@@ -35,6 +35,11 @@ module.exports = {
   // API-verified task (see referralService), so throwaway accounts earn nothing.
   REFERRER_BONUS: 150,
   REFEREE_BONUS: 100,
+  // Referral pays out only after the referee has genuinely used the app: their account
+  // must be at least REFERRAL_MIN_REFEREE_HOURS old AND they must have completed at
+  // least REFERRAL_MIN_REFEREE_TASKS verified tasks. Raises the cost of farming the bonus.
+  REFERRAL_MIN_REFEREE_TASKS: 5,
+  REFERRAL_MIN_REFEREE_HOURS: 24,
 
   MIN_SECONDS_BETWEEN_TASKS: 20,
   MAX_TASKS_PER_HOUR: 40,

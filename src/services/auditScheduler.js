@@ -15,6 +15,12 @@ async function refreshSubscriberCounts() {
         'UPDATE channels SET subscriber_count=$1 WHERE id=$2',
         [count, ch.id]
       );
+      // Keep users.subscriber_count in sync — the admin/user list reads it,
+      // and it is otherwise only written at sign-in.
+      await pool.query(
+        'UPDATE users SET subscriber_count=$1 WHERE youtube_channel_id=$2',
+        [count, ch.youtube_channel_id]
+      );
       updated++;
     }
     console.log(`[SUBS] Refreshed subscriber counts for ${updated} channels`);

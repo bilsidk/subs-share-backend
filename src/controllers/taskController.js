@@ -280,7 +280,16 @@ const verifyTask = async (req, res, next) => {
     }
 
     const appSettings = await settings.getSettings();
-    const delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
+    let delaySeconds = appSettings.completion_delay_seconds || cfg.COMPLETION_DELAY_SECONDS;
+    // Watch tasks must be watched for their FULL requested duration — the server floor
+    // is watch_minutes×60 (capped at the actual video length so it's always achievable),
+    // not the flat 45s. This is the anti-cheat backstop behind the in-app player timer.
+    const wfloor = await pool.query('SELECT task_type, watch_minutes, video_duration_sec FROM tasks WHERE id=$1', [taskId]);
+    if (wfloor.rows.length && wfloor.rows[0].task_type === 'watch') {
+      const need = (wfloor.rows[0].watch_minutes || cfg.MIN_WATCH_MINUTES) * 60;
+      const vidLen = wfloor.rows[0].video_duration_sec || need;
+      delaySeconds = Math.max(delaySeconds, Math.min(need, vidLen));
+    }
 
     // The completion delay is measured ONLY from the server-stamped start
     // (POST /tasks/:id/start). The old client-supplied started_at fallback is gone
@@ -327,6 +336,21 @@ const verifyTask = async (req, res, next) => {
       );
       if (parseInt(wc.rows[0].n, 10) >= cfg.MAX_WATCH_PER_DAY)
         return res.status(429).json({ error: `Daily watch limit reached (${cfg.MAX_WATCH_PER_DAY}). Come back tomorrow.`, code: 'WATCH_DAILY_LIMIT' });
+
+      // Anti-parallel-farm: watch tasks can't be verified against YouTube, so a user
+      // could /start many at once, let one clock elapse, and claim them all. Require
+      // consecutive watch claims to be spaced by ~this task's watch time, so N watch
+      // rewards genuinely cost N × the duration of real time (not one shared window).
+      const lastW = await pool.query(
+        `SELECT completed_at FROM completions WHERE user_id=$1 AND task_type='watch' ORDER BY completed_at DESC LIMIT 1`,
+        [req.userId]
+      );
+      if (lastW.rows.length) {
+        const gap = (Date.now() - new Date(lastW.rows[0].completed_at).getTime()) / 1000;
+        const need = (task.watch_minutes || cfg.MIN_WATCH_MINUTES) * 60 * 0.9; // 10% grace for UX
+        if (gap < need)
+          return res.status(429).json({ error: 'Finish watching this video before claiming the next one.', code: 'WATCH_TOO_SOON', remaining: Math.ceil(need - gap) });
+      }
     }
 
     // Fast pre-checks (authoritative enforcement is inside the transaction below).
@@ -505,6 +529,20 @@ const startTask = async (req, res, next) => {
   try {
     const taskId = parseInt(req.params.id, 10);
     if (!taskId) return res.status(400).json({ error: 'Invalid task id' });
+    // Watch tasks are honor-mode (no YouTube verification), so their only real cost is
+    // TIME. To stop a user from starting many watch tasks in parallel and letting one
+    // clock satisfy all of them, allow only ONE open (un-completed) watch start at a
+    // time: starting a new watch task clears the user's other pending watch starts.
+    const tt = await pool.query('SELECT task_type FROM tasks WHERE id=$1', [taskId]);
+    if (tt.rows.length && tt.rows[0].task_type === 'watch') {
+      await pool.query(
+        `DELETE FROM task_starts ts
+         WHERE ts.user_id = $1 AND ts.task_id <> $2
+           AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = ts.task_id AND t.task_type = 'watch')
+           AND NOT EXISTS (SELECT 1 FROM completions cp WHERE cp.user_id = $1 AND cp.task_id = ts.task_id)`,
+        [req.userId, taskId]
+      );
+    }
     await pool.query(
       `INSERT INTO task_starts (user_id, task_id, started_at) VALUES ($1, $2, NOW())
        ON CONFLICT (user_id, task_id) DO UPDATE SET started_at = NOW()`,
