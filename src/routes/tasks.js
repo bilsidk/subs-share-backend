@@ -2,7 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { authenticate, requireNotBanned } = require('../middleware/auth');
-const { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask, getIntegrityNonce } = require('../controllers/taskController');
+const { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask, getIntegrityNonce, getCommentHelp, getClientConfig } = require('../controllers/taskController');
 const { pauseCampaign, resumeCampaign, cancelCampaign } = require('../controllers/campaignController');
 
 // Per-endpoint rate limiters (defined here so they're in the normal middleware chain)
@@ -25,6 +25,8 @@ const campaignLimiter = rateLimit({
 router.get('/',              authenticate, getAvailableTasks);
 router.get('/my',            authenticate, getMyTasks);
 router.get('/integrity-nonce', authenticate, getIntegrityNonce);
+router.get('/config', authenticate, getClientConfig);
+router.get('/:id/comment-help', authenticate, getCommentHelp);
 router.post('/',          campaignLimiter, authenticate, requireNotBanned, createTask);
 router.post('/:id/start',    verifyLimiter, authenticate, requireNotBanned, startTask);
 router.post('/:id/verify',   verifyLimiter, authenticate, requireNotBanned, verifyTask);

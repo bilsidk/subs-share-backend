@@ -21,7 +21,8 @@ const pauseCampaign = async (req, res, next) => {
     const task = await assertOwnsTask(taskId, req.userId);
     if (!task) return res.status(403).json({ error: 'Campaign not found or not yours' });
     if (task.status !== 'active') return res.status(400).json({ error: `Campaign is already ${task.status}` });
-    await pool.query('UPDATE tasks SET status=\'paused\' WHERE id=$1', [taskId]);
+    const r = await pool.query("UPDATE tasks SET status='paused' WHERE id=$1 AND status='active'", [taskId]);
+    if (!r.rowCount) return res.status(409).json({ error: 'Campaign is no longer active.' });
     res.json({ ok: true, message: 'Campaign paused.', status: 'paused', remaining_slots: task.remaining_slots });
   } catch (err) { next(err); }
 };
@@ -33,7 +34,8 @@ const resumeCampaign = async (req, res, next) => {
     if (!task) return res.status(403).json({ error: 'Campaign not found or not yours' });
     if (task.status !== 'paused') return res.status(400).json({ error: `Campaign is ${task.status}` });
     if (task.remaining_slots <= 0) return res.status(400).json({ error: 'No slots remaining' });
-    await pool.query('UPDATE tasks SET status=\'active\' WHERE id=$1', [taskId]);
+    const r = await pool.query("UPDATE tasks SET status='active' WHERE id=$1 AND status='paused'", [taskId]);
+    if (!r.rowCount) return res.status(409).json({ error: 'Campaign is no longer paused.' });
     res.json({ ok: true, message: 'Campaign resumed.', status: 'active', remaining_slots: task.remaining_slots });
   } catch (err) { next(err); }
 };
@@ -64,18 +66,31 @@ const cancelCampaign = async (req, res, next) => {
     // existed (the migration backfills these, so this is belt-and-suspenders).
     const legacySlotCost = (rewardMap[task.task_type] || cfg.REWARDS[task.task_type] || 0) + margin;
     const slotCost = Number.isFinite(task.slot_cost) && task.slot_cost != null ? task.slot_cost : legacySlotCost;
-    const refundCoins = isAppOwner ? 0 : task.remaining_slots * slotCost;
 
     await client.query('BEGIN');
+    // AUTHORITATIVE: lock the task row and re-read remaining_slots + status INSIDE the
+    // transaction. verifyTask locks the same row FOR UPDATE before decrementing a slot,
+    // so this serialises the two: an earner can't be paid for a slot that we then also
+    // refund (coin minting), and a second concurrent cancel sees status='cancelled' and
+    // bails (no double refund). The earlier assertOwnsTask read was unlocked/stale.
+    const locked = await client.query(
+      'SELECT remaining_slots, status FROM tasks WHERE id=$1 FOR UPDATE', [taskId]);
+    if (!locked.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Campaign not found' }); }
+    const remainingSlots = locked.rows[0].remaining_slots;
+    if (['cancelled','completed'].includes(locked.rows[0].status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Campaign is already ${locked.rows[0].status}` });
+    }
+    const refundCoins = isAppOwner ? 0 : remainingSlots * slotCost;
     await client.query('UPDATE tasks SET status=\'cancelled\' WHERE id=$1', [taskId]);
     if (refundCoins > 0) {
       await client.query('UPDATE users SET coins=coins+$1 WHERE id=$2', [refundCoins, req.userId]);
       await client.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'earned',$3)`,
-        [req.userId, refundCoins, `tx:campaign_cancelled|type:${task.task_type}|slots:${task.remaining_slots}|refund:${refundCoins}`]);
+        [req.userId, refundCoins, `tx:campaign_cancelled|type:${task.task_type}|slots:${remainingSlots}|refund:${refundCoins}`]);
     }
     await client.query('COMMIT');
     const bal = await pool.query('SELECT coins FROM users WHERE id=$1', [req.userId]);
-    res.json({ ok: true, refunded_coins: refundCoins, refunded_slots: task.remaining_slots, new_balance: bal.rows[0].coins,
+    res.json({ ok: true, refunded_coins: refundCoins, refunded_slots: remainingSlots, new_balance: bal.rows[0].coins,
       message: refundCoins > 0 ? `Campaign cancelled. ${refundCoins} coins refunded.` : 'Campaign cancelled.' });
   } catch (err) { await client.query('ROLLBACK'); next(err); }
   finally { client.release(); }

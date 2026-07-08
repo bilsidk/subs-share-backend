@@ -94,6 +94,17 @@ async function runMigration() {
     await pool.query(`UPDATE tasks SET slot_cost = reward + 3 WHERE slot_cost IS NULL`);
   } catch (e) { console.error('[migrate] tasks.slot_cost:', e.message); }
 
+  // 8b. Lock the like_comment bonus onto the task at creation time (exactly like
+  //     slot_cost). The owner funds this bonus into slot_cost at creation; if the earner
+  //     payout re-read the LIVE comment_bonus setting at verify time instead, raising the
+  //     setting would pay every OUTSTANDING campaign's earners more than the owner funded
+  //     — minting coins / house loss. Backfill legacy like_comment rows with the default
+  //     bonus (4) that was in effect when they were created. Idempotent.
+  try {
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS comment_bonus INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`UPDATE tasks SET comment_bonus = 4 WHERE task_type = 'like_comment' AND comment_bonus = 0`);
+  } catch (e) { console.error('[migrate] tasks.comment_bonus:', e.message); }
+
   // 9. Permanent per-user "already earned for this target" ledger. A user can be
   //    paid at most once for subscribing to a given channel / liking / watching a
   //    given video — across ALL campaigns, forever. Closes the "re-created
@@ -110,12 +121,15 @@ async function runMigration() {
       INSERT INTO earned_targets (user_id, target_key)
       SELECT user_id, 'sub:'||target_channel_id FROM completions
         WHERE task_type IN ('subscribe','subscribe_like') AND target_channel_id IS NOT NULL
+          AND verify_status IN ('verified','pending')
       UNION
       SELECT user_id, 'like:'||target_video_id FROM completions
         WHERE task_type IN ('like','like_comment','subscribe_like') AND target_video_id IS NOT NULL
+          AND verify_status IN ('verified','pending')
       UNION
       SELECT user_id, 'watch:'||target_video_id FROM completions
         WHERE task_type = 'watch' AND target_video_id IS NOT NULL
+          AND verify_status IN ('verified','pending')
       ON CONFLICT DO NOTHING`);
   } catch (e) { console.error('[migrate] earned_targets:', e.message); }
 
@@ -160,6 +174,33 @@ async function runMigration() {
     await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_coins_nonneg`);
     await pool.query(`ALTER TABLE users ADD CONSTRAINT users_coins_nonneg CHECK (coins >= 0)`);
   } catch (e) { console.error('[migrate] coins_nonneg:', e.message); }
+
+  // 11b. Welcome-bonus integrity. The coins column historically defaulted to 50, which
+  //      (a) DOUBLE-GRANTED new users — default 50 + the explicit +50 welcome bonus = 100,
+  //      while the ledger recorded only +50 — and (b) DEFEATED the delete+re-signup guard:
+  //      account_history only blocks the +50 UPDATE, so a re-signer still got 50 from the
+  //      column default. Set the default to 0 so the ledger-backed +50 bonus is the SOLE
+  //      initial grant (re-signers correctly get 0). SCHEMA-ONLY — existing balances are
+  //      NOT modified; this only affects rows inserted from here on.
+  try {
+    await pool.query(`ALTER TABLE users ALTER COLUMN coins SET DEFAULT 0`);
+  } catch (e) { console.error('[migrate] users.coins default:', e.message); }
+
+  // 12. Comment examples for like_comment campaigns. Owner picks up to 3 curated
+  //     template indices (rendered per-locale by the client). comment_ai_examples
+  //     caches the per-video, per-language Gemini-generated example so it's produced
+  //     at most once per (task, language).
+  try {
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS comment_example_ids INTEGER[]`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS comment_ai_examples (
+        task_id    INTEGER NOT NULL,
+        lang       VARCHAR(12) NOT NULL,
+        text       TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (task_id, lang)
+      )`);
+  } catch (e) { console.error('[migrate] comment_examples:', e.message); }
 }
 
 module.exports = { runMigration };

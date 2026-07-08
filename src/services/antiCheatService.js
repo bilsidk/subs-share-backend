@@ -28,7 +28,7 @@ async function assertVelocityOk(userId) {
             (SELECT COUNT(*) FROM completions
              WHERE user_id = $1 AND completed_at > NOW() - INTERVAL '1 hour') AS last_hour,
             (SELECT COUNT(*) FROM completions
-             WHERE user_id = $1 AND completed_at > NOW()::date) AS today
+             WHERE user_id = $1 AND completed_at > NOW() - INTERVAL '24 hours') AS today
      FROM users WHERE id = $1`,
     [userId]
   );

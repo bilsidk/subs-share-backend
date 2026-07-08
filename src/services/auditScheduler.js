@@ -24,8 +24,10 @@ async function refreshSubscriberCounts() {
       updated++;
     }
     console.log(`[SUBS] Refreshed subscriber counts for ${updated} channels`);
+    return updated;
   } catch (e) {
     console.error('[SUBS] Refresh failed:', e.message);
+    return 0;
   }
 }
 
@@ -35,9 +37,17 @@ function startAuditScheduler() {
     try { await runAudit(); } catch (e) { console.error('[AUDIT] Scheduler error:', e.message); }
   });
 
-  // Refresh subscriber counts daily at 3am UTC
+  // Refresh subscriber counts daily at 3am UTC + reap abandoned task_starts
   cron.schedule('0 3 * * *', async () => {
     await refreshSubscriberCounts();
+    try {
+      const r = await pool.query("DELETE FROM task_starts WHERE started_at < NOW() - INTERVAL '7 days'");
+      if (r.rowCount) console.log(`[CLEANUP] Removed ${r.rowCount} stale task_starts`);
+    } catch (e) { console.error('[CLEANUP] task_starts reap failed:', e.message); }
+    // Claw back coins for Google Play purchases that were later refunded/charged-back
+    // (voided). Best-effort; no-ops if the Play service account isn't configured.
+    try { await require('../controllers/paymentController').reconcileVoidedGooglePurchases(); }
+    catch (e) { console.error('[CLEANUP] voided-purchase reconcile failed:', e.message); }
   });
 
   console.log('🕒 Audit scheduler started (every 15 min) + subscriber refresh (daily 3am UTC)');

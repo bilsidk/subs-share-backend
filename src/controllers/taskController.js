@@ -3,13 +3,28 @@ const youtubeService = require('../services/youtubeService');
 const settings       = require('../services/settingsService');
 const antiCheat      = require('../services/antiCheatService');
 const integrity      = require('../services/integrityService');
+const gemini         = require('../services/geminiService');
 const cfg            = require('../config');
+const { watchPricing, earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum } = require('../lib/economy');
 
 // GET /tasks/integrity-nonce — issues a short-lived nonce for the Play Integrity
 // token request. The client requests a Google-signed token bound to this nonce and
 // sends it back on /verify.
 const getIntegrityNonce = async (req, res) => {
   res.json({ nonce: integrity.issueNonce(req.userId) });
+};
+
+// GET /tasks/config — client-visible runtime flags (safe subset of app_settings), so
+// the app can hide disabled task types and show a maintenance banner without an update.
+const getClientConfig = async (req, res, next) => {
+  try {
+    const s = await settings.getSettings();
+    res.json({
+      disabled_task_types: Array.isArray(s.disabled_task_types) ? s.disabled_task_types : [],
+      daily_cap_by_type: (s.daily_cap_by_type && typeof s.daily_cap_by_type === 'object') ? s.daily_cap_by_type : {},
+      maintenance_message: typeof s.maintenance_message === 'string' ? s.maintenance_message : '',
+    });
+  } catch (err) { next(err); }
 };
 
 const VERIFIABLE_SUB  = new Set(['subscribe', 'subscribe_like']);
@@ -26,22 +41,28 @@ function tierFor(role) {
   return cfg.TIER.USER;
 }
 
-function watchPricing(minutes, baseReward, margin) {
-  const extraMins = Math.max(0, minutes - 1);
-  const reward = baseReward + (extraMins * cfg.WATCH_REWARD_PER_EXTRA_MIN);
-  return { reward, slotCost: reward + margin };
+// Origins the real web SPA is served from. A client claiming platform:'web' (to be
+// exempt from the Android-only Play Integrity gate) must actually be a browser request
+// FROM one of these origins — otherwise a repackaged Android app could just POST
+// platform:'web' to skip integrity entirely. Not a hard boundary on its own (headers
+// are forgeable), but it removes the trivial body-field bypass; the real device-trust
+// wall is Play Integrity (Android) + the device/velocity caps (web). Reuses the CORS
+// allowlist so the two never drift; falls back to the platform claim if unconfigured
+// so it can never lock out a correctly-configured web deployment.
+const WEB_ORIGINS = (process.env.WEB_ORIGINS || process.env.ALLOWED_ORIGINS ||
+  'https://app.viralboostnow.com,https://viralboostnow.com')
+  .split(',').map(s => s.trim()).filter(o => o && o !== '*');
+
+function isTrustedWebRequest(req) {
+  if (req.body.platform !== 'web') return false;
+  if (!WEB_ORIGINS.length) return true; // not configured — keep prior behavior, no regression
+  const origin = req.headers.origin || '';
+  const referer = req.headers.referer || '';
+  return WEB_ORIGINS.some(o => origin === o || referer === o || referer.startsWith(o + '/'));
 }
 
-// The permanent "already earned" ledger keys implied by a completed task. A user
-// may be paid at most once per key, across all campaigns, forever.
-function earnedKeysFor(task) {
-  const keys = [];
-  const ch = task.target_channel_id, vid = task.target_video_id;
-  if ((task.task_type === 'subscribe' || task.task_type === 'subscribe_like') && ch)  keys.push('sub:' + ch);
-  if ((task.task_type === 'like' || task.task_type === 'like_comment' || task.task_type === 'subscribe_like') && vid) keys.push('like:' + vid);
-  if (task.task_type === 'watch' && vid) keys.push('watch:' + vid);
-  return keys;
-}
+// watchPricing / earnedKeysFor / sanitizeExampleIds / commentMeetsMinimum now live in
+// src/lib/economy.js (pure + unit-tested) and are imported at the top of this file.
 
 // GET /tasks
 const getAvailableTasks = async (req, res, next) => {
@@ -51,16 +72,21 @@ const getAvailableTasks = async (req, res, next) => {
     let typeFilter = '';
     if (type) { params.push(type); typeFilter = `AND t.task_type=$${params.length}`; }
 
+    // Admin kill switch: hide disabled task types from the feed (default-safe: empty = all shown).
+    const feedSettings = await settings.getSettings();
+    const disabledTypes = Array.isArray(feedSettings.disabled_task_types) ? feedSettings.disabled_task_types : [];
+    let disabledFilter = '';
+    if (disabledTypes.length) { params.push(disabledTypes); disabledFilter = `AND NOT (t.task_type = ANY($${params.length}))`; }
+
     const r = await pool.query(
-      `SELECT t.id, t.task_type, t.reward, t.remaining_slots, t.total_slots,
+      // NOTE: remaining_slots / total_slots / progress are deliberately NOT selected —
+      // campaign capacity is private to the owner (My Campaigns / Admin). The feed only
+      // needs enough to render a task; ordering still uses the fill ratio internally.
+      `SELECT t.id, t.task_type, t.reward,
               t.target_video_id, t.target_video_url, t.watch_minutes, t.created_at,
               c.channel_name, COALESCE(c.channel_url, '') AS channel_url, c.youtube_channel_id,
               u.name AS owner_name, u.avatar AS owner_avatar, u.role AS owner_role,
-              CASE u.role WHEN 'owner' THEN 1 WHEN 'premium' THEN 2 ELSE 3 END AS tier,
-              CASE WHEN COALESCE(t.total_slots,t.remaining_slots)>0
-                   THEN (COALESCE(t.total_slots,t.remaining_slots)-t.remaining_slots)::float
-                        /COALESCE(t.total_slots,t.remaining_slots)
-                   ELSE 0 END AS progress_ratio
+              CASE u.role WHEN 'owner' THEN 1 WHEN 'premium' THEN 2 ELSE 3 END AS tier
        FROM tasks t
        JOIN channels c ON c.id=t.channel_id
        JOIN users u    ON u.id=c.user_id
@@ -78,8 +104,13 @@ const getAvailableTasks = async (req, res, next) => {
                WHEN 'watch'          THEN ARRAY['watch:'||COALESCE(t.target_video_id,'')]
                ELSE ARRAY[]::text[]
              END)
-         ) ${typeFilter}
-       ORDER BY tier ASC, progress_ratio ASC, t.created_at DESC LIMIT 80`,
+         ) ${typeFilter} ${disabledFilter}
+       ORDER BY tier ASC,
+                (CASE WHEN COALESCE(t.total_slots,t.remaining_slots)>0
+                      THEN (COALESCE(t.total_slots,t.remaining_slots)-t.remaining_slots)::float
+                           /COALESCE(t.total_slots,t.remaining_slots)
+                      ELSE 0 END) ASC,
+                t.created_at DESC LIMIT 80`,
       params
     );
     res.json(r.rows);
@@ -92,6 +123,7 @@ const createTask = async (req, res, next) => {
   try {
     const { channel_id, task_type='subscribe', subscribers_wanted, target_video_url, watch_minutes } = req.body;
     const slots = parseInt(subscribers_wanted, 10);
+    const commentExampleIds = task_type === 'like_comment' ? sanitizeExampleIds(req.body.comment_example_ids) : [];
 
     const requiresChannel = ['subscribe', 'subscribe_like'].includes(task_type);
     if (requiresChannel && !channel_id)
@@ -104,6 +136,9 @@ const createTask = async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid task_type' });
 
     const appSettings = await settings.getSettings();
+    // Admin kill switch: block creating a temporarily-disabled campaign type.
+    if ((Array.isArray(appSettings.disabled_task_types) ? appSettings.disabled_task_types : []).includes(task_type))
+      return res.status(403).json({ error: 'This campaign type is temporarily disabled. Please try another type.', code: 'TASK_TYPE_DISABLED' });
     const margin = appSettings.house_margin ?? 3;
     const rewardMap = {
       subscribe:       appSettings.coins_subscribe,
@@ -120,7 +155,17 @@ const createTask = async (req, res, next) => {
     // like_comment can pay a comment bonus ON TOP of the reward when the comment is
     // verified. The owner must fund that too, otherwise each verified comment pays out
     // more than the slot cost (10 reward + 4 bonus = 14 vs a 13 charge) — minting coins.
-    if (task_type === 'like_comment') slotCost += (appSettings.comment_bonus ?? cfg.COMMENT_BONUS);
+    // Lock the funded bonus onto the task (stored below) so a later admin change to the
+    // comment_bonus setting can't make the earner payout exceed what the owner funded.
+    let commentBonusFunded = 0;
+    if (task_type === 'like_comment') {
+      commentBonusFunded = appSettings.comment_bonus ?? cfg.COMMENT_BONUS;
+      slotCost += commentBonusFunded;
+    }
+    // Persisted watch length: only meaningful for watch tasks (set from the validated
+    // `mins` below). Defaults to MIN for every other type so a junk req.body.watch_minutes
+    // can never reach the INSERT (it would raise a type error → 500).
+    let storedWatchMinutes = cfg.MIN_WATCH_MINUTES;
 
     if (task_type !== 'subscribe') {
       if (!target_video_url)
@@ -137,6 +182,7 @@ const createTask = async (req, res, next) => {
         const mins = parseInt(watch_minutes, 10) || cfg.MIN_WATCH_MINUTES;
         if (mins < cfg.MIN_WATCH_MINUTES || mins > cfg.MAX_WATCH_MINUTES)
           return res.status(400).json({ error: `watch_minutes must be ${cfg.MIN_WATCH_MINUTES}–${cfg.MAX_WATCH_MINUTES}` });
+        storedWatchMinutes = mins;
         const requiredSec = mins * 60;
         if (videoInfo.durationSec < requiredSec)
           return res.status(400).json({
@@ -194,6 +240,15 @@ const createTask = async (req, res, next) => {
     }
 
     if (!isOwner) {
+      // Lock the user row FIRST so the campaign-count cap AND the coin check are
+      // serialized per user. Reading the count before the lock let concurrent
+      // POST /tasks each see the pre-lock count and both slip past the cap.
+      const uRes = await client.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [req.userId]);
+      if (!uRes.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'User not found' });
+      }
+
       const activeCount = await client.query(
         `SELECT COUNT(*) FROM tasks t JOIN channels c ON c.id=t.channel_id
          WHERE c.user_id=$1 AND t.status IN ('active','paused')`,
@@ -204,7 +259,6 @@ const createTask = async (req, res, next) => {
         return res.status(400).json({ error: `Maximum ${appSettings.max_campaigns_per_user} active campaigns allowed.` });
       }
 
-      const uRes = await client.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [req.userId]);
       if (uRes.rows[0].coins < totalCost) {
         await client.query('ROLLBACK');
         return res.status(402).json({ error: 'Insufficient coins', required: totalCost, available: uRes.rows[0].coins });
@@ -214,11 +268,12 @@ const createTask = async (req, res, next) => {
 
     const taskRes = await client.query(
       `INSERT INTO tasks (channel_id,task_type,reward,remaining_slots,total_slots,
-                          target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier,slot_cost)
-       VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+                          target_video_id,target_video_url,watch_minutes,video_duration_sec,owner_tier,slot_cost,comment_bonus,comment_example_ids)
+       VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [effectiveChannelId, task_type, taskReward, slots,
        target_video_id, target_video_url||null,
-       watch_minutes||cfg.MIN_WATCH_MINUTES, video_duration_sec, ownerTier, slotCost]
+       storedWatchMinutes, video_duration_sec, ownerTier, slotCost, commentBonusFunded,
+       commentExampleIds.length ? commentExampleIds : null]
     );
 
     // Structured transaction key — frontend translates this
@@ -239,7 +294,11 @@ const createTask = async (req, res, next) => {
 
 // POST /tasks/:id/verify
 const verifyTask = async (req, res, next) => {
-  const dbc = await pool.connect();
+  // The dedicated pooled client is acquired ONLY for the BEGIN..COMMIT block far below
+  // (just before BEGIN). Every pre-transaction read uses the shared pool, so we never
+  // hold a connection idle across the (potentially slow) YouTube API calls — that could
+  // starve the pool under load.
+  let dbc = null;
   try {
     const taskId = parseInt(req.params.id, 10);
     const { device_id } = req.body;
@@ -272,10 +331,12 @@ const verifyTask = async (req, res, next) => {
           return res.status(503).json({ error: 'Could not verify device security, please try again.', code: 'INTEGRITY_ERROR' });
         console.warn('[integrity] verify error (soft):', e.message);
       }
-    } else if (cfg.INTEGRITY_ENFORCE && req.body.platform !== 'web') {
+    } else if (cfg.INTEGRITY_ENFORCE && !isTrustedWebRequest(req)) {
       // Web can't produce a Play Integrity token — it's a separate (lower) trust tier,
-      // governed by the device/velocity guards instead. Only Android is hard-required
-      // to attest, so enforcing integrity never breaks the web client.
+      // governed by the device/velocity guards instead. The web exemption requires a
+      // genuine browser request from a known web origin (isTrustedWebRequest), so an
+      // Android client can't just claim platform:'web' to skip attestation. Android is
+      // hard-required to attest; a real web client is unaffected.
       return res.status(426).json({ error: 'Please update the app to continue earning.', code: 'INTEGRITY_REQUIRED' });
     }
 
@@ -331,11 +392,12 @@ const verifyTask = async (req, res, next) => {
     // same video).
     if (task.task_type === 'watch') {
       const wc = await pool.query(
-        `SELECT COUNT(*) AS n FROM completions WHERE user_id=$1 AND task_type='watch' AND completed_at > NOW()::date`,
+        `SELECT COUNT(*) AS n FROM completions WHERE user_id=$1 AND task_type='watch' AND completed_at > NOW() - INTERVAL '24 hours'`,
         [req.userId]
       );
-      if (parseInt(wc.rows[0].n, 10) >= cfg.MAX_WATCH_PER_DAY)
-        return res.status(429).json({ error: `Daily watch limit reached (${cfg.MAX_WATCH_PER_DAY}). Come back tomorrow.`, code: 'WATCH_DAILY_LIMIT' });
+      const watchCap = parseInt(appSettings.max_watch_per_day, 10) || cfg.MAX_WATCH_PER_DAY;
+      if (parseInt(wc.rows[0].n, 10) >= watchCap)
+        return res.status(429).json({ error: `Daily watch limit reached (${watchCap}). Come back tomorrow.`, code: 'WATCH_DAILY_LIMIT' });
 
       // Anti-parallel-farm: watch tasks can't be verified against YouTube, so a user
       // could /start many at once, let one clock elapse, and claim them all. Require
@@ -351,6 +413,19 @@ const verifyTask = async (req, res, next) => {
         if (gap < need)
           return res.status(429).json({ error: 'Finish watching this video before claiming the next one.', code: 'WATCH_TOO_SOON', remaining: Math.ceil(need - gap) });
       }
+    }
+
+    // Admin per-type daily cap (default-safe: 0/absent = unlimited). Applies to every
+    // task type; watch also keeps its own hard MAX_WATCH_PER_DAY above.
+    const capMap = (appSettings.daily_cap_by_type && typeof appSettings.daily_cap_by_type === 'object') ? appSettings.daily_cap_by_type : {};
+    const typeCap = parseInt(capMap[task.task_type], 10);
+    if (typeCap > 0) {
+      const cc = await pool.query(
+        `SELECT COUNT(*) AS n FROM completions WHERE user_id=$1 AND task_type=$2 AND completed_at > NOW() - INTERVAL '24 hours'`,
+        [req.userId, task.task_type]
+      );
+      if (parseInt(cc.rows[0].n, 10) >= typeCap)
+        return res.status(429).json({ error: 'Daily limit reached for this task type — try a different one or come back tomorrow.', code: 'TYPE_DAILY_LIMIT' });
     }
 
     // Fast pre-checks (authoritative enforcement is inside the transaction below).
@@ -374,12 +449,21 @@ const verifyTask = async (req, res, next) => {
         if (VERIFIABLE_SUB.has(task.task_type)) {
           const subOk = await youtubeService.verifySubscription(req.userId, task.target_channel_id);
           if (!subOk) {
-            pool.query(
-              `UPDATE tasks SET status='paused' WHERE id=$1
-               AND (SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified') = 0
-               AND remaining_slots = total_slots`,
-              [taskId]
-            ).catch(() => {});
+            // Auto-pause a brand-new campaign ONLY when its target channel is genuinely
+            // gone (deleted/invalid), verified server-side with the public API key. A
+            // single earner who simply didn't subscribe must never be able to pause a
+            // healthy competitor's campaign (griefing) — a present or unknown (API error)
+            // channel result leaves the campaign untouched.
+            youtubeService.channelExists(task.target_channel_id).then((exists) => {
+              if (exists === false) {
+                pool.query(
+                  `UPDATE tasks SET status='paused' WHERE id=$1
+                   AND (SELECT COUNT(*) FROM completions WHERE task_id=$1 AND verify_status='verified') = 0
+                   AND remaining_slots = total_slots`,
+                  [taskId]
+                ).catch(() => {});
+              }
+            }).catch(() => {});
             return res.status(400).json({ verified: false, error: 'Subscription not detected. Make sure you subscribed and the channel still exists, then try again.' });
           }
         }
@@ -388,14 +472,32 @@ const verifyTask = async (req, res, next) => {
           if (!likeOk) return res.status(400).json({ verified: false, error: 'Like not detected. Like the video first, then try again.' });
         }
         if (task.task_type === 'like_comment') {
-          try {
-            const cr = await youtubeService.verifyComment(req.userId, task.target_video_id);
-            if (cr.found) {
-              commentVerified = true;
-              const s = await settings.getSettings();
-              bonusCoins = s.comment_bonus ?? cfg.COMMENT_BONUS;
-            }
-          } catch (e) { console.error('Comment check error (non-fatal):', e.message); }
+          // The advertiser is paying for a like AND a comment, so the comment is
+          // REQUIRED to complete — otherwise a like-only (or channel-less) user
+          // would consume the slot and get paid for a comment that never lands.
+          // API errors still throw and are handled by the outer catch (degraded/401).
+          const cr = await youtubeService.verifyComment(req.userId, task.target_video_id);
+          if (!cr.found) {
+            if (cr.reason === 'no_channel_id')
+              return res.status(400).json({ verified: false, code: 'NO_CHANNEL', error: 'You need a YouTube channel to comment. Create one on YouTube (free), then try again — or pick a like-only task.' });
+            if (cr.disabled)
+              return res.status(400).json({ verified: false, code: 'COMMENTS_DISABLED', error: "Comments are turned off on this video, so this task can't be completed." });
+            return res.status(400).json({ verified: false, error: 'Comment not detected. Post your comment on the video, then try again.' });
+          }
+          // Quality floor (pure helper in lib/economy): ≥ MIN_COMMENT_WORDS words OR
+          // ≥ MIN_COMMENT_CHARS chars (char fallback for space-less languages) so
+          // one-word "nice" spam can't claim. Verified against the real comment text.
+          if (!commentMeetsMinimum(cr.commentText, cfg.MIN_COMMENT_WORDS, cfg.MIN_COMMENT_CHARS)) {
+            return res.status(400).json({ verified: false, code: 'COMMENT_TOO_SHORT',
+              min_words: cfg.MIN_COMMENT_WORDS,
+              error: `Your comment is too short — write at least ${cfg.MIN_COMMENT_WORDS} words so it looks genuine.` });
+          }
+          commentVerified = true;
+          // Pay the bonus the OWNER FUNDED at creation (locked onto the task row), NOT
+          // the current live setting — otherwise an admin raising comment_bonus later
+          // would pay earners more than was charged on every outstanding campaign.
+          // Legacy rows are backfilled to the historical default (4) by migrate.js.
+          bonusCoins = Number.isInteger(task.comment_bonus) ? task.comment_bonus : cfg.COMMENT_BONUS;
         }
         await settings.recordApiSuccess();
       } catch (e) {
@@ -413,7 +515,39 @@ const verifyTask = async (req, res, next) => {
 
     const totalCoins = task.reward + bonusCoins;
 
+    dbc = await pool.connect();
     await dbc.query('BEGIN');
+    // Serialize THIS user's concurrent verifies by locking their row first, so the
+    // per-user daily caps below (and the balance credit) can't be beaten by a burst of
+    // parallel /verify requests that each read a pre-credit count. (The earlier COUNTs
+    // are fast pre-checks outside any transaction; these are the authoritative ones.)
+    await dbc.query('SELECT 1 FROM users WHERE id=$1 FOR UPDATE', [req.userId]);
+
+    // Watch hard cap — re-checked under the lock.
+    if (task.task_type === 'watch') {
+      const wc2 = await dbc.query(
+        `SELECT COUNT(*) AS n FROM completions WHERE user_id=$1 AND task_type='watch' AND completed_at > NOW() - INTERVAL '24 hours'`,
+        [req.userId]
+      );
+      const watchCap2 = parseInt(appSettings.max_watch_per_day, 10) || cfg.MAX_WATCH_PER_DAY;
+      if (parseInt(wc2.rows[0].n, 10) >= watchCap2) {
+        await dbc.query('ROLLBACK');
+        return res.status(429).json({ error: `Daily watch limit reached (${watchCap2}). Come back tomorrow.`, code: 'WATCH_DAILY_LIMIT' });
+      }
+    }
+    // Admin per-type daily cap — re-checked under the lock.
+    const typeCap2 = parseInt(capMap[task.task_type], 10);
+    if (typeCap2 > 0) {
+      const cc2 = await dbc.query(
+        `SELECT COUNT(*) AS n FROM completions WHERE user_id=$1 AND task_type=$2 AND completed_at > NOW() - INTERVAL '24 hours'`,
+        [req.userId, task.task_type]
+      );
+      if (parseInt(cc2.rows[0].n, 10) >= typeCap2) {
+        await dbc.query('ROLLBACK');
+        return res.status(429).json({ error: 'Daily limit reached for this task type — try a different one or come back tomorrow.', code: 'TYPE_DAILY_LIMIT' });
+      }
+    }
+
     // Lock the row and re-read status INSIDE the transaction — a concurrent pause/
     // cancel between the earlier pre-check and here must not slip through.
     const lockRes = await dbc.query('SELECT remaining_slots, status FROM tasks WHERE id=$1 AND remaining_slots>0 FOR UPDATE', [taskId]);
@@ -499,8 +633,8 @@ const verifyTask = async (req, res, next) => {
         : degraded ? `⚠️ Verification offline — coins awarded, may be checked later.`
         : `Coins awarded. This task may be spot-checked.`,
     });
-  } catch (err) { await dbc.query('ROLLBACK'); next(err); }
-  finally { dbc.release(); }
+  } catch (err) { if (dbc) await dbc.query('ROLLBACK').catch(() => {}); next(err); }
+  finally { if (dbc) dbc.release(); }
 };
 
 // GET /tasks/my
@@ -552,4 +686,39 @@ const startTask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask, getIntegrityNonce };
+// GET /tasks/:id/comment-help?lang=xx — what to comment for a like_comment task:
+// the owner's chosen curated template indices (client renders them per-locale) plus,
+// if Gemini is configured, ONE fresh video-specific example in the user's language
+// (cached once per task+lang). Everything degrades to templates if AI is unavailable.
+const getCommentHelp = async (req, res, next) => {
+  try {
+    const taskId = parseInt(req.params.id, 10);
+    const lang = String(req.query.lang || 'en').slice(0, 12);
+    const r = await pool.query('SELECT task_type, target_video_id, comment_example_ids FROM tasks WHERE id=$1', [taskId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Task not found' });
+    const task = r.rows[0];
+    const out = {
+      min_words: cfg.MIN_COMMENT_WORDS,
+      min_chars: cfg.MIN_COMMENT_CHARS,
+      template_ids: Array.isArray(task.comment_example_ids) ? task.comment_example_ids : [],
+      ai_example: null,
+    };
+    if (task.task_type !== 'like_comment') return res.json(out);
+
+    const cached = await pool.query('SELECT text FROM comment_ai_examples WHERE task_id=$1 AND lang=$2', [taskId, lang]);
+    if (cached.rows.length) { out.ai_example = cached.rows[0].text; return res.json(out); }
+
+    if (gemini.available() && task.target_video_id) {
+      let title = '';
+      try { const vi = await youtubeService.getVideoDuration(task.target_video_id); title = vi?.title || ''; } catch (_) {}
+      const ex = await gemini.generateExampleComment(title, lang);
+      if (ex) {
+        out.ai_example = ex;
+        pool.query('INSERT INTO comment_ai_examples (task_id, lang, text) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [taskId, lang, ex]).catch(() => {});
+      }
+    }
+    res.json(out);
+  } catch (err) { next(err); }
+};
+
+module.exports = { getAvailableTasks, createTask, verifyTask, getMyTasks, startTask, getIntegrityNonce, getCommentHelp, getClientConfig };

@@ -71,34 +71,62 @@ async function verifyLike(userId, videoId) {
   } catch (e) { rethrowAuthError(e); }
 }
 
+// Look for the user's own top-level comment on a video. Returns:
+//   { found:true, commentText, exhausted:true }                  — comment present
+//   { found:false, reason:'no_channel_id', exhausted:false }     — user has no channel
+//   { found:false, disabled:true, exhausted:false }              — comments disabled
+//   { found:false, exhausted:true }   — CONCLUSIVE: paged to the end, genuinely absent
+//   { found:false, exhausted:false }  — INCONCLUSIVE: page cap hit before the end
+// `exhausted` distinguishes a real "not there" from "not found yet in the pages we
+// scanned". Callers that PENALIZE on a negative (e.g. audit bonus clawback) must act
+// ONLY when exhausted===true, so a buried comment on a very busy video is never wrongly
+// clawed back. Real-time verify still treats any not-found as a (retryable) reject.
 async function verifyComment(userId, videoId) {
   const yt = await getYouTubeClient(userId);
   const userRow = await pool.query('SELECT youtube_channel_id FROM users WHERE id=$1', [userId]);
   const authorChannelId = userRow.rows[0]?.youtube_channel_id;
-  if (!authorChannelId) return { found: false, reason: 'no_channel_id' };
+  if (!authorChannelId) return { found: false, reason: 'no_channel_id', exhausted: false };
 
+  const MAX_PAGES = 5; // up to ~500 most-recent comments
   let pageToken;
-  for (let page = 0; page < 2; page++) {
+  let exhausted = false;
+  for (let page = 0; page < MAX_PAGES; page++) {
     let res;
     try {
       res = await yt.commentThreads.list({
-        part: 'snippet', videoId, maxResults: 50, order: 'time',
+        part: 'snippet', videoId, maxResults: 100, order: 'time',
         ...(pageToken ? { pageToken } : {}),
       });
     } catch (e) {
       if (e.response?.data?.error?.errors?.[0]?.reason === 'commentsDisabled')
-        return { found: false, disabled: true };
+        return { found: false, disabled: true, exhausted: false };
       throw e;
     }
     for (const item of (res.data.items || [])) {
       const top = item.snippet?.topLevelComment?.snippet;
       if (top?.authorChannelId?.value === authorChannelId)
-        return { found: true, commentText: top.textOriginal };
+        return { found: true, commentText: top.textOriginal, exhausted: true };
     }
     pageToken = res.data.nextPageToken;
-    if (!pageToken) break;
+    if (!pageToken) { exhausted = true; break; }
   }
-  return { found: false };
+  return { found: false, exhausted };
+}
+
+// Definitively check whether a channel still exists, using the public API key (so it
+// works for any target channel, not just the caller's). Returns true if present, false
+// if YouTube returns zero items (deleted/invalid id), or null on any API error
+// (INCONCLUSIVE — callers must not treat null as "gone").
+async function channelExists(channelId) {
+  if (!channelId) return null;
+  try {
+    const yt = google.youtube({ version: 'v3', auth: process.env.YOUTUBE_API_KEY });
+    const res = await yt.channels.list({ part: 'id', id: channelId });
+    return (res.data.items || []).length > 0;
+  } catch (e) {
+    console.error('[YouTube] channelExists failed:', e.message);
+    return null;
+  }
 }
 
 async function getVideoDuration(videoId) {
@@ -180,5 +208,5 @@ async function resolveChannel(input) {
 module.exports = {
   verifySubscription, verifyLike, verifyComment,
   getVideoDuration, fetchOwnChannelId, getSubscriberCount,
-  parseVideoId, resolveChannel,
+  parseVideoId, resolveChannel, channelExists,
 };

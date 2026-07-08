@@ -24,6 +24,16 @@ module.exports = {
 
   COMMENT_BONUS: 4,
 
+  // like_comment quality floor — the posted comment must have at least this many
+  // words OR characters (the char fallback covers space-less languages: zh/ja/th).
+  // Verified against the real comment text returned by the YouTube API.
+  MIN_COMMENT_WORDS: 5,
+  MIN_COMMENT_CHARS: 15,
+  // Number of built-in curated example templates (indices 0..N-1). The owner may
+  // select up to 3; clients render them from their own locale file by index.
+  CURATED_COMMENT_COUNT: 12,
+  MAX_COMMENT_EXAMPLES: 3,
+
   MIN_WATCH_MINUTES: 1,
   MAX_WATCH_MINUTES: 60,
 
@@ -45,7 +55,7 @@ module.exports = {
   MAX_TASKS_PER_HOUR: 40,
   // Watch tasks can't be verified against a YouTube API, so cap how many a single
   // user can bank per day to bound honor-system abuse.
-  MAX_WATCH_PER_DAY: 20,
+  MAX_WATCH_PER_DAY: 100,   // hard fallback if the admin setting is unset (admin setting default is also 100)
   MAX_ACCOUNTS_PER_DEVICE: 3,
   RECLAIMS_BEFORE_BAN: 3,
   TRUST_FLOOR_BAN: 25,

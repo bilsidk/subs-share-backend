@@ -26,6 +26,13 @@ const DEFAULTS = {
   house_margin: 3,
   completion_delay_seconds: 45,
   max_campaigns_per_user: 5,
+  max_watch_per_day: 100,    // watch tasks a user can complete per day (admin-editable; was a hardcoded 20)
+  // Admin controls — DEFAULT-SAFE: empty list = every task type enabled; empty object
+  // = no per-type daily cap; empty string = no maintenance banner. Missing settings
+  // therefore change NOTHING, so this is backwards-compatible on first deploy.
+  disabled_task_types: [],   // e.g. ['subscribe'] hides+blocks that type app-wide
+  daily_cap_by_type: {},     // e.g. { subscribe: 10 } caps subscribe tasks/user/day (0/absent = unlimited)
+  maintenance_message: '',   // non-empty = shown as a banner in the app
 };
 
 // ─── Email ────────────────────────────────────────────────────────────────────

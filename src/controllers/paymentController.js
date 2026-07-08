@@ -7,14 +7,16 @@ const settings = require('../services/settingsService');
 
 // Only let the client choose the post-payment return origin from a known list,
 // so the success/cancel redirect can't be turned into an open redirect.
-const RETURN_ALLOWLIST = ['app.viralboostnow.com', 'viralboostnow.com', 'localhost'];
+const RETURN_ALLOWLIST = ['app.viralboostnow.com', 'viralboostnow.com', 'subs-share-backend-production.up.railway.app', 'localhost'];
 function resolveReturnBase(url) {
   if (typeof url !== 'string') return null;
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' && u.hostname !== 'localhost') return null;
-    const ok = RETURN_ALLOWLIST.includes(u.hostname) || u.hostname.endsWith('.railway.app');
-    return ok ? u.origin : null;
+    // Exact-host allowlist only. A blanket `.railway.app` subdomain match would let any
+    // Railway-hosted page become the post-payment redirect target (open redirect /
+    // payment-status spoof), so the known deployment host is pinned explicitly instead.
+    return RETURN_ALLOWLIST.includes(u.hostname) ? u.origin : null;
   } catch { return null; }
 }
 
@@ -128,6 +130,39 @@ async function handleIPN(req, res) {
         await dbc.query('COMMIT');
       } catch (e) { await dbc.query('ROLLBACK'); throw e; }
       finally { dbc.release(); }
+    } else if (payment_status === 'refunded') {
+      // The payment was refunded upstream. If we already credited coins for this invoice,
+      // claw them back. The atomic finished->refunded transition fires the reversal at
+      // most once (idempotent against retried IPNs); GREATEST(0,…) so a user who already
+      // spent the coins can't go negative.
+      const dbc = await pool.connect();
+      try {
+        await dbc.query('BEGIN');
+        const claim = await dbc.query(
+          `UPDATE pending_payments SET status='refunded' WHERE invoice_id=$1 AND status='finished'`,
+          [String(invoice_id)]
+        );
+        if (claim.rowCount === 1) {
+          const bonus = Math.floor(payment.coins * payment.bonus_pct / 100);
+          const total_coins = payment.coins + bonus;
+          await dbc.query('UPDATE users SET coins = GREATEST(0, coins - $1) WHERE id = $2', [total_coins, payment.user_id]);
+          await dbc.query(
+            `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, 'spent', $3)`,
+            [payment.user_id, total_coins, `tx:purchase_refunded|coins:${total_coins}|invoice:${invoice_id}`]
+          );
+        } else {
+          // Never credited (still pending) or already reversed — record the status only.
+          await dbc.query(
+            `UPDATE pending_payments SET status='refunded' WHERE invoice_id=$1 AND status NOT IN ('finished','refunded')`,
+            [String(invoice_id)]
+          );
+        }
+        await dbc.query('COMMIT');
+      } catch (e) { await dbc.query('ROLLBACK'); throw e; } finally { dbc.release(); }
+    } else if (payment_status === 'partially_refunded') {
+      // Ambiguous amount on a fixed-rate invoice — don't guess how many coins to reclaim.
+      // Flag for manual review rather than risk an incorrect deduction.
+      console.warn(`[payments] partially_refunded invoice=${invoice_id} — manual review needed`);
     } else if (['failed', 'expired', 'cancelled'].includes(payment_status)) {
       await pool.query(
         `UPDATE pending_payments SET status=$1 WHERE invoice_id=$2 AND status <> 'finished'`,
@@ -203,4 +238,48 @@ async function verifyGooglePlay(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { getTiers, createCheckout, handleIPN, verifyGooglePlay };
+// Reconcile Google Play refunds / chargebacks / revocations. Google exposes these via
+// the Voided Purchases API (there is no verify-time signal). For any voided token we
+// previously credited (google_purchases.status='credited'), claw the coins back exactly
+// once — the credited->voided transition is the idempotency guard, GREATEST(0,…) avoids
+// underflow, and a token whose user was deleted (user_id NULL via ON DELETE SET NULL) is
+// skipped. Best-effort; called from the daily scheduler. No-ops if the Play service
+// account isn't configured (listVoidedPurchases throws → caught here).
+async function reconcileVoidedGooglePurchases() {
+  let voided;
+  try {
+    const since = Date.now() - 30 * 24 * 60 * 60 * 1000; // look back 30 days each run
+    voided = await googlePlay.listVoidedPurchases(since);
+  } catch (e) {
+    console.error('[gplay] voided-purchases list failed:', e.message);
+    return { checked: 0, reversed: 0 };
+  }
+  let reversed = 0;
+  for (const v of voided) {
+    const dbc = await pool.connect();
+    try {
+      await dbc.query('BEGIN');
+      const claim = await dbc.query(
+        `UPDATE google_purchases SET status='voided' WHERE purchase_token=$1 AND status='credited' RETURNING user_id, coins`,
+        [v.purchaseToken]
+      );
+      if (claim.rows.length) {
+        const { user_id, coins } = claim.rows[0];
+        if (user_id != null && coins > 0) {
+          await dbc.query('UPDATE users SET coins = GREATEST(0, coins - $1) WHERE id = $2', [coins, user_id]);
+          await dbc.query(
+            `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, 'spent', $3)`,
+            [user_id, coins, `tx:purchase_voided|coins:${coins}`]
+          );
+        }
+        reversed++;
+      }
+      await dbc.query('COMMIT');
+    } catch (e) { await dbc.query('ROLLBACK'); console.error('[gplay] void reverse failed', v.purchaseToken, e.message); }
+    finally { dbc.release(); }
+  }
+  if (reversed) console.log(`[gplay] reconciled ${reversed} voided purchase(s) of ${voided.length} checked`);
+  return { checked: voided.length, reversed };
+}
+
+module.exports = { getTiers, createCheckout, handleIPN, verifyGooglePlay, reconcileVoidedGooglePurchases };

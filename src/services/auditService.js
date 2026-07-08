@@ -46,9 +46,19 @@ async function clawbackCommentBonus(c) {
 
 async function reclaim(c) {
   const dbc = await pool.connect();
+  let claimed = false;
   try {
     await dbc.query('BEGIN');
-    await dbc.query(`UPDATE completions SET verify_status='reclaimed', last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE WHERE id=$1`, [c.id]);
+    // Atomic claim: only the pass that actually transitions this completion OUT of an
+    // active state does the reversal. A second overlapping audit pass (cadence overrun,
+    // manual run racing the cron) sees no row and no-ops — so coins are never
+    // double-deducted and remaining_slots is never double-incremented.
+    const claim = await dbc.query(
+      `UPDATE completions SET verify_status='reclaimed', last_audit_at=NOW(), audit_count=audit_count+1, quick_audited=TRUE
+       WHERE id=$1 AND verify_status IN ('verified','pending') RETURNING id`,
+      [c.id]
+    );
+    if (!claim.rows.length) { await dbc.query('COMMIT'); return; }
     // Lock the balance so we can tell whether the reward was fully recovered.
     const balRow = await dbc.query('SELECT coins FROM users WHERE id=$1 FOR UPDATE', [c.user_id]);
     const before = balRow.rows.length ? Number(balRow.rows[0].coins) : 0;
@@ -78,9 +88,12 @@ async function reclaim(c) {
       );
     }
     await dbc.query('COMMIT');
+    claimed = true;
   } catch (e) { await dbc.query('ROLLBACK'); console.error('[AUDIT] reclaim failed', c.id, e.message); }
   finally { dbc.release(); }
-  await antiCheat.penalizeReclaim(c.user_id);
+  // Only penalize when THIS pass actually performed the reclaim — never on the no-op
+  // path of an overlapping duplicate pass.
+  if (claimed) await antiCheat.penalizeReclaim(c.user_id);
 }
 
 async function runPass(quick) {
@@ -117,7 +130,11 @@ async function runPass(quick) {
       if (c.task_type === 'like_comment' && c.comment_verified && c.bonus_coins > 0) {
         try {
           const cr = await youtubeService.verifyComment(c.user_id, c.target_video_id);
-          if (cr && !cr.found) await clawbackCommentBonus(c);
+          // Reclaim the bonus ONLY on a CONCLUSIVE negative — paged to the end of the
+          // comment list and the comment is genuinely gone. Any inconclusive result
+          // (page cap hit before the end, comments disabled, no channel) errs toward the
+          // user so a buried comment on a busy video isn't wrongly clawed back.
+          if (cr && !cr.found && cr.exhausted === true) await clawbackCommentBonus(c);
         } catch (_) { /* comment re-check is best-effort */ }
       }
     } else {

@@ -3,10 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- Content Security Policy: restrict where scripts, connections and frames can go so a
-     stray XSS can't exfiltrate the token or load foreign scripts. 'unsafe-inline' is
-     required because the SPA uses inline handlers; object-src is fully blocked. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.youtube.com https://s.ytimg.com; connect-src 'self' https://subs-share-backend-production.up.railway.app https://accounts.google.com; frame-src https://accounts.google.com https://www.youtube.com https://www.youtube-nocookie.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'self'; form-action 'self'; object-src 'none'">
+<meta name="theme-color" content="#6C63FF">
+<meta name="color-scheme" content="dark light">
+<meta name="application-name" content="SubsShare">
+<meta name="apple-mobile-web-app-title" content="SubsShare">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="SubsShare">
+<meta name="keywords" content="grow youtube channel, get youtube subscribers, get more youtube views, youtube likes, youtube promotion, youtube engagement, earn coins">
+<!-- Warm up the third-party connections that affect Core Web Vitals / LCP -->
+<link rel="preconnect" href="https://accounts.google.com" crossorigin>
+<link rel="preconnect" href="https://www.youtube.com">
+<link rel="dns-prefetch" href="https://flagcdn.com">
+<link rel="dns-prefetch" href="https://subs-share-backend-production.up.railway.app">
+<!-- Content Security Policy. script-src has NO 'unsafe-inline': every event handler is
+     delegated in app.js (data-act / data-model), so an injected inline <script> or
+     on*-handler simply won't execute — a future HTML-injection bug degrades to inert
+     markup instead of code execution. object-src is fully blocked.
+     img-src is pinned to the ONLY hosts real images come from (logo=self, Google
+     avatars=*.googleusercontent.com/*.ggpht.com, language flags=flagcdn.com) instead of
+     a blanket https: — closing the silent <img> beacon channel (connect-src already
+     blocks fetch/XHR exfil). style-src keeps 'unsafe-inline' (the SPA uses inline styles;
+     CSS can't execute code). The YouTube player is an <iframe> (frame-src) so it's
+     unaffected; Google Sign-In (oauth2 code client) runs from accounts.google.com. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com https://apis.google.com https://www.youtube.com https://s.ytimg.com; connect-src 'self' https://subs-share-backend-production.up.railway.app https://accounts.google.com; frame-src https://accounts.google.com https://www.youtube.com https://www.youtube-nocookie.com; img-src 'self' data: https://*.googleusercontent.com https://*.ggpht.com https://flagcdn.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; base-uri 'self'; form-action 'self'; object-src 'none'">
 <title>SubsShare — Grow your YouTube channel</title>
 <meta name="description" content="Earn coins by subscribing, liking and watching — spend them to grow your own YouTube channel.">
 <link rel="canonical" href="https://app.viralboostnow.com/">
@@ -15,7 +35,14 @@
 <meta property="og:description" content="Earn coins by subscribing, liking and watching — spend them to grow your own YouTube channel.">
 <meta property="og:url" content="https://app.viralboostnow.com/">
 <meta property="og:image" content="https://viralboostnow.com/logo.png">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"SubsShare","applicationCategory":"SocialNetworkingApplication","operatingSystem":"Web","url":"https://app.viralboostnow.com/","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"description":"Earn coins by subscribing, liking and watching — spend them to grow your own YouTube channel."}</script>
+<meta property="og:site_name" content="SubsShare">
+<meta property="og:image:alt" content="SubsShare — grow your YouTube channel">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="SubsShare — Grow your YouTube channel">
+<meta name="twitter:description" content="Earn coins by subscribing, liking and watching — spend them to grow your own YouTube channel.">
+<meta name="twitter:image" content="https://viralboostnow.com/logo.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"SubsShare","applicationCategory":"SocialNetworkingApplication","operatingSystem":"Web, Android","url":"https://app.viralboostnow.com/","inLanguage":["en","es","fr","pt","ar","hi","ru","de","tr","id","ja","ko","bn","zh-CN","zh-TW"],"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"description":"Earn coins by subscribing, liking, commenting on and watching other creators' videos — then spend them to grow your own YouTube channel.","featureList":["Earn coins by subscribing, liking, commenting and watching","Run growth campaigns for real subscribers, likes and views","Available in 15 languages","Secure Google sign-in"],"publisher":{"@type":"Organization","name":"SubsShare","url":"https://viralboostnow.com/"}}</script>
 <link rel="icon" type="image/png" href="logo.png">
 <link rel="apple-touch-icon" href="logo.png">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -114,8 +141,25 @@ a{color:var(--primary)}
 </style>
 </head>
 <body>
-<div id="app"><div class="center"><div class="spinner"></div></div></div>
-<script src="i18n.js?v=10"></script>
-<script src="app.js?v=10"></script>
+<!-- Crawlable content for search engines / no-JS visitors. app.js replaces #app on
+     first render, so real users see the live SPA; this static hero is what bots that
+     don't execute JS index, and it gives the page a real <h1> and description. -->
+<div id="app">
+  <main class="center">
+    <img class="logo" src="logo.png" alt="SubsShare logo" width="76" height="76" style="border-radius:18px">
+    <h1 style="font-size:28px;margin-top:12px">SubsShare — grow your YouTube channel</h1>
+    <p style="color:var(--text2);max-width:440px;margin:12px auto 0;line-height:1.6">
+      Earn coins by subscribing to, liking, commenting on and watching other creators' videos,
+      then spend them to get real subscribers, likes and views on your own channel.
+      Free to join and available in 15 languages.
+    </p>
+    <div class="spinner" style="margin-top:20px"></div>
+    <noscript>
+      <p style="color:var(--danger);max-width:440px;margin-top:16px">SubsShare needs JavaScript to run — please enable it in your browser and reload this page.</p>
+    </noscript>
+  </main>
+</div>
+<script src="i18n.js?v=11"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

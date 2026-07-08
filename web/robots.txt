@@ -1,0 +1,5 @@
+# SubsShare — allow full crawling (JS files included so search engines can render the SPA)
+User-agent: *
+Allow: /
+
+Sitemap: https://app.viralboostnow.com/sitemap.xml

@@ -8,9 +8,12 @@ const API_BASE = location.hostname.endsWith('.railway.app') || location.hostname
 const YT_SCOPE = 'openid email profile https://www.googleapis.com/auth/youtube.readonly';
 const COMPLETION_DELAY = 45; // server enforces the real value; this drives the UI countdown
 
-// Mirrors backend src/config — display estimates only, server is authoritative
+// Mirrors backend src/config — display estimates only, server is authoritative. These
+// objects are REPLACED IN PLACE from GET /payments/tiers on load (see init) so an admin
+// re-price is reflected on web too; the static values here are just the offline fallback.
 const SLOT_COSTS = { subscribe: 15, like: 9, like_comment: 17, subscribe_like: 20, watch: 7 };
 const REWARDS    = { subscribe: 12, like: 6,  like_comment: 10, subscribe_like: 17, watch: 4 };
+const WATCH_EXTRA = { cost: 1 }; // per extra-minute owner cost (from tiers.watch_extra_min_cost)
 
 const TASK_TYPES = ['subscribe', 'like', 'like_comment', 'subscribe_like', 'watch'];
 const TASK_ICON = { subscribe: '🔔', like: '👍', like_comment: '💬', subscribe_like: '⭐', watch: '▶️' };
@@ -18,6 +21,10 @@ const TASK_ICON = { subscribe: '🔔', like: '👍', like_comment: '💬', subsc
 const tr = (k, v) => window.I18N.t(k, v);
 const taskLabel = (type) => tr('task.' + type);
 function changeLang(lang) { window.I18N.setLang(lang); render(); }
+// Per-view document title — nicer history/UX and a small SPA-route SEO signal (the
+// static <title> still covers non-JS crawlers).
+const TAB_TITLES = { home: 'Home', earn: 'Earn Coins', grow: 'Grow Your Channel', wallet: 'Wallet', buy: 'Buy Coins', referral: 'Invite Friends', profile: 'Profile', admin: 'Admin' };
+function setDocTitle(tab) { document.title = (TAB_TITLES[tab] ? TAB_TITLES[tab] + ' · ' : '') + 'SubsShare — Grow your YouTube channel'; }
 
 // ── state ─────────────────────────────────────────────────────────────────────
 const S = {
@@ -53,8 +60,23 @@ async function req(method, path, body) {
   const text = await res.text();
   let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || 'Unexpected response' }; }
   if (res.status === 401 && S.token) { signOut(); throw new Error(tr('common.sessionExpired')); }
-  if (!res.ok) { const e = new Error(data.error || tr('common.requestFailed')); e.code = data.code; e.data = data; throw e; }
+  if (!res.ok) { const e = new Error(data.error || tr('common.requestFailed')); e.code = data.code; e.data = data; e.status = res.status; throw e; }
   return data;
+}
+// Retry through TRANSIENT failures only (network drop / 5xx); never retry 4xx.
+// Used for the /start stamp so a connectivity blip at task-open doesn't force a
+// redo at claim time (server returns NOT_STARTED otherwise).
+async function reqRetry(method, path, body, attempts = 4) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try { return await req(method, path, body); }
+    catch (e) {
+      lastErr = e;
+      if (e.status && e.status >= 400 && e.status < 500) throw e;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    }
+  }
+  throw lastErr;
 }
 const api = {
   signIn: (code, referralCode) => req('POST', '/auth/google', { serverAuthCode: code, web: true, referralCode: referralCode || undefined }),
@@ -67,14 +89,18 @@ const api = {
   tasks: (type) => req('GET', '/tasks' + (type ? '?type=' + encodeURIComponent(type) : '')),
   myTasks: () => req('GET', '/tasks/my'),
   createTask: (d) => req('POST', '/tasks', d),
-  start: (id) => req('POST', `/tasks/${id}/start`).catch(() => {}), // server-stamps the start time
+  start: (id) => reqRetry('POST', `/tasks/${id}/start`).catch(() => {}), // server-stamps the start time (retried through blips)
   verify: (id, startedAt) => req('POST', `/tasks/${id}/verify`, { started_at: startedAt, device_id: deviceId(), platform: 'web' }),
+  commentHelp: (id, lang) => req('GET', `/tasks/${id}/comment-help?lang=${encodeURIComponent(lang || 'en')}`),
   pause: (id) => req('PATCH', `/tasks/${id}/pause`),
   resume: (id) => req('PATCH', `/tasks/${id}/resume`),
   cancel: (id) => req('DELETE', `/tasks/${id}`),
   txs: (page = 1) => req('GET', '/transactions?page=' + page),
+  tiers: () => req('GET', '/payments/tiers'),
   buyCoins: (amount) => req('POST', '/payments/create-checkout', { amount, return_url: location.origin }),
   adminStatus: () => req('GET', '/admin/status'),
+  adminStats: () => req('GET', '/admin/stats'),
+  config: () => req('GET', '/tasks/config'),
   adminSaveSettings: (d) => req('PATCH', '/admin/settings', d),
   adminMode: (mode) => req('POST', '/admin/mode', { mode }),
   adminUsers: (params) => { const qs = new URLSearchParams(params || {}).toString(); return req('GET', '/admin/users' + (qs ? '?' + qs : '')); },
@@ -90,7 +116,7 @@ const ADMIN_FIELDS = [
   ['coins_watch', 'Watch reward'], ['comment_bonus', 'Comment bonus'],
   ['house_margin', 'House margin'], ['completion_delay_seconds', 'Verify delay (s)'],
   ['daily_limit_user', 'Daily limit (user)'], ['daily_limit_premium', 'Daily limit (premium)'],
-  ['max_campaigns_per_user', 'Max campaigns/user'],
+  ['max_campaigns_per_user', 'Max campaigns/user'], ['max_watch_per_day', 'Watch tasks/day'],
 ];
 
 // ── buy coins (NowPayments) ───────────────────────────────────────────────────
@@ -238,7 +264,7 @@ function txText(desc) {
 
 function estimateCost(type, slots, watchMins) {
   let perSlot = SLOT_COSTS[type] ?? 0;
-  if (type === 'watch') perSlot += Math.max(0, (watchMins || 1) - 1);
+  if (type === 'watch') perSlot += Math.max(0, (watchMins || 1) - 1) * (WATCH_EXTRA.cost || 1);
   return perSlot * (slots || 0);
 }
 
@@ -256,14 +282,14 @@ function updatePrice() { const el = document.getElementById('pricebox'); if (el)
 
 // ── data loading ──────────────────────────────────────────────────────────────
 async function loadTab(tab) {
-  S.tab = tab; render();
+  S.tab = tab; setDocTitle(tab); render();
   try {
-    if (tab === 'earn') S.tasks = await api.tasks(S.taskFilter);
-    else if (tab === 'grow') { [S.myTasks, S.channels] = await Promise.all([api.myTasks(), api.channels()]); }
+    if (tab === 'earn') { S.tasks = await api.tasks(S.taskFilter); api.config().then(c => { S.config = c; render(); }).catch(() => {}); }
+    else if (tab === 'grow') { [S.myTasks, S.channels] = await Promise.all([api.myTasks(), api.channels()]); api.config().then(c => { S.config = c; render(); }).catch(() => {}); }
     else if (tab === 'wallet') S.txs = (await api.txs(1)).transactions || [];
     else if (tab === 'home') { [S.myTasks, S.txs] = await Promise.all([api.myTasks(), api.txs(1).then(r => r.transactions || [])]); }
     else if (tab === 'referral') S.referral = await api.getReferral().catch(() => null);
-    else if (tab === 'admin') { const st = await api.adminStatus(); A.stats = st.stats; A.mode = st.api_mode; A.settings = { ...st.settings }; }
+    else if (tab === 'admin') { const [st, dash] = await Promise.all([api.adminStatus(), api.adminStats().catch(() => null)]); A.stats = st.stats; A.mode = st.api_mode; A.settings = { ...st.settings }; A.dashboard = dash; }
     else if (tab === 'profile') S.user = (await api.me()) || S.user;
     if (tab !== 'profile' && S.token) { api.me().then(d => { S.user = d; render(); }).catch(() => {}); }
   } catch (e) { console.warn('load error', e.message); }
@@ -279,8 +305,14 @@ function openTask(taskId) {
   // Watch tasks play inside the app via the embedded YouTube player (timer bound to
   // real playback). Everything else uses the open-YouTube modal.
   if (task.task_type === 'watch') { openWatchPlayer(task); return; }
-  S.modal = { task, status: 'idle', countdown: 0, startedAt: null, error: '', message: '' };
+  S.modal = { task, status: 'idle', countdown: 0, startedAt: null, error: '', message: '', help: null };
   render();
+  // For like+comment, load what-to-comment help (owner templates + optional AI example).
+  if (task.task_type === 'like_comment') {
+    api.commentHelp(task.id, window.I18N.getLang()).then(h => {
+      if (S.modal && String(S.modal.task.id) === String(task.id)) { S.modal.help = h; render(); }
+    }).catch(() => {});
+  }
 }
 function closeModal() { S.modal = null; if (countdownTimer) clearInterval(countdownTimer); render(); }
 
@@ -428,7 +460,18 @@ async function wpClaim() {
     } else {
       showAlert(tr('watch.claimedMsg', { coins: res.total_coins ?? res.coins_earned ?? t.reward }), tr('watch.claimedTitle'));
     }
-  } catch (e) { WP.claiming = false; showAlert(e.message || tr('common.requestFailed')); }
+  } catch (e) {
+    WP.claiming = false;
+    // Turn auto-play OFF on a failed claim so the auto-claim trigger in wpUpdate()
+    // can't hammer in a tight loop while offline. Coins aren't lost — the button
+    // stays available to retry manually.
+    if (WP.auto) { WP.auto = false; wpUpdate(); }
+    const code = e.code;
+    if (code === 'WATCH_DAILY_LIMIT') showAlert(tr('earn.typeLimitMessage'), tr('earn.typeLimitTitle'));
+    else if (code === 'WATCH_TOO_SOON') showAlert(e.data?.remaining ? tr('modal.waitMore', { s: e.data.remaining }) : (e.message || tr('common.requestFailed')));
+    else if (code === 'ALREADY_EARNED' || code === 'ALREADY_COMPLETED') { WP.claimed = true; showAlert(e.message || tr('modal.unavailable')); }
+    else showAlert(e.message || tr('common.requestFailed'));
+  }
 }
 function wpStillWatching() {
   wpStyles();
@@ -514,6 +557,16 @@ async function modalVerify() {
       S.tasks = S.tasks.filter(t => t.id !== m.task.id);
       m.status = 'done';
       m.message = e.message || tr('modal.unavailable');
+    } else if (code === 'COMMENT_TOO_SHORT') {
+      m.status = 'ready';
+      m.error = tr('earn.commentTooShortMessage', { min: e.data?.min_words || 5 });
+    } else if (code === 'TYPE_DAILY_LIMIT' || code === 'TASK_TYPE_DISABLED') {
+      S.tasks = S.tasks.filter(t => t.id !== m.task.id);
+      m.status = 'done';
+      m.message = e.message;
+    } else if (code === 'NO_CHANNEL' || code === 'COMMENTS_DISABLED') {
+      m.status = 'ready';
+      m.error = e.message; // server sends a clear, specific message
     } else {
       m.status = 'ready';
       m.error = e.data?.remaining ? tr('modal.waitMore', { s: e.data.remaining }) : e.message;
@@ -523,7 +576,13 @@ async function modalVerify() {
 }
 
 // ── create campaign ───────────────────────────────────────────────────────────
-const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', creating: false, error: '', ok: '', channelId: null, newChannelUrl: '', addingChannel: false };
+const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', creating: false, error: '', ok: '', channelId: null, newChannelUrl: '', addingChannel: false, exampleIds: [] };
+function toggleCExample(id) {
+  const i = C.exampleIds.indexOf(id);
+  if (i >= 0) C.exampleIds.splice(i, 1);
+  else if (C.exampleIds.length < 3) C.exampleIds.push(id);
+  render();
+}
 
 async function addChannelWeb() {
   const url = (C.newChannelUrl || '').trim();
@@ -558,9 +617,10 @@ async function createCampaign() {
       subscribers_wanted: slots,
       target_video_url: needsVideo ? C.videoUrl.trim() : undefined,
       watch_minutes: C.type === 'watch' ? parseInt(C.watchMins, 10) || 1 : undefined,
+      comment_example_ids: C.type === 'like_comment' ? C.exampleIds : undefined,
     });
     C.ok = res.owner ? tr('grow.createdFree') : tr('grow.created', { coins: res.coins_spent });
-    C.slots = ''; C.videoUrl = '';
+    C.slots = ''; C.videoUrl = ''; C.exampleIds = [];
     [S.myTasks, S.user] = [await api.myTasks(), await api.me()];
   } catch (e) { C.error = e.message; }
   C.creating = false; render();
@@ -632,11 +692,19 @@ function buyCoinsCustom() {
 // ── admin ───────────────────────────────────────────────────────────────────
 function gotoAdmin() { loadTab('admin'); }
 
+function adminToggleType(type) {
+  const cur = Array.isArray(A.settings.disabled_task_types) ? A.settings.disabled_task_types : [];
+  A.settings.disabled_task_types = cur.includes(type) ? cur.filter(x => x !== type) : [...cur, type];
+  adminSave(); // persist immediately for instant effect
+}
 async function adminSave() {
   A.msg = ''; A.err = ''; A.saving = true; render();
   try {
     const payload = {};
     ADMIN_FIELDS.forEach(([k]) => { if (A.settings[k] !== '' && A.settings[k] != null) payload[k] = parseInt(A.settings[k], 10); });
+    if (Array.isArray(A.settings.disabled_task_types)) payload.disabled_task_types = A.settings.disabled_task_types;
+    if (A.settings.daily_cap_by_type && typeof A.settings.daily_cap_by_type === 'object') payload.daily_cap_by_type = A.settings.daily_cap_by_type;
+    if (typeof A.settings.maintenance_message === 'string') payload.maintenance_message = A.settings.maintenance_message;
     const res = await api.adminSaveSettings(payload);
     A.settings = { ...res.settings };
     A.msg = 'Settings saved.';
@@ -681,7 +749,7 @@ function vLogin() {
     <p style="color:var(--text2);margin:10px 0 30px;line-height:1.5">${tr('login.tagline')}</p>
     <input id="ref-code" type="text" maxlength="12" placeholder="${tr('login.referralPlaceholder')}" value="${esc(S.referralCode || '')}"
       style="text-transform:uppercase;text-align:center;letter-spacing:2px;max-width:280px;margin:0 auto 12px;display:block">
-    <button class="gbtn" onclick="signIn()" ${S.busy ? 'disabled' : ''}>
+    <button class="gbtn" data-act="signIn" ${S.busy ? 'disabled' : ''}>
       <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.4 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3l5.7-5.7C34.3 6.1 29.4 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>
       ${S.busy ? tr('login.signingIn') : tr('login.continue')}
     </button>
@@ -698,14 +766,14 @@ function vHeader(title) {
 
 function vEarn() {
   const chips = [null, ...TASK_TYPES].map(t =>
-    `<button class="chip ${S.taskFilter === t ? 'active' : ''}" onclick="setFilter(${t ? `'${t}'` : 'null'})">${t ? taskLabel(t) : tr('earn.all')}</button>`
+    `<button class="chip ${S.taskFilter === t ? 'active' : ''}" data-act="setFilter"${t ? ` data-a="${t}"` : ''}>${t ? taskLabel(t) : tr('earn.all')}</button>`
   ).join('');
   const list = S.tasks.length ? S.tasks.map(t => `
-    <div class="card task" onclick="openTask(${esc(String(t.id))})">
+    <div class="card task" data-act="openTask" data-a="${esc(String(t.id))}">
       <div class="avatar">${t.owner_avatar ? `<img src="${esc(t.owner_avatar)}" alt="" referrerpolicy="no-referrer">` : (TASK_ICON[t.task_type] || '📺')}</div>
       <div class="info">
         <div class="name">${esc(t.channel_name || t.owner_name)}</div>
-        <div class="meta">${taskLabel(t.task_type)}${t.task_type === 'watch' ? ` · ${esc(t.watch_minutes)} ${tr('earn.min')}` : ''} · ${esc(t.remaining_slots)} ${tr('earn.left')}</div>
+        <div class="meta">${taskLabel(t.task_type)}${t.task_type === 'watch' ? ` · ${esc(t.watch_minutes)} ${tr('earn.min')}` : ''}</div>
       </div>
       <div class="reward">+${t.reward} 🪙</div>
     </div>`).join('')
@@ -713,29 +781,48 @@ function vEarn() {
   return vHeader(tr('earn.title')) + `<div class="screen"><div class="chips">${chips}</div>${list}</div>`;
 }
 
+// What-to-comment block for a like+comment task: owner-selected curated templates
+// (rendered from the viewer's locale) + an optional AI example for this video.
+function vCommentHelp(help) {
+  const min = (help && help.min_words) || 5;
+  const arr = window.I18N.t('earn.commentExamples');
+  const examples = Array.isArray(arr) ? arr : [];
+  const ai = (help && help.ai_example)
+    ? `<div style="background:rgba(108,99,255,.12);border-radius:8px;padding:8px;margin-bottom:6px"><div style="font-size:11px;font-weight:700;color:var(--primary,#6C63FF)">${esc(tr('earn.commentAiSuggestion'))}</div><div style="font-style:italic;font-size:13px">“${esc(help.ai_example)}”</div></div>`
+    : '';
+  const ids = (help && Array.isArray(help.template_ids)) ? help.template_ids : [];
+  const items = ids.map(id => examples[id] ? `<div style="font-size:13px;color:var(--text2,#b9b9c6)">• ${esc(examples[id])}</div>` : '').join('');
+  return `<div style="background:var(--card,#14141c);border:1px solid var(--border,#2a2a38);border-radius:10px;padding:10px;margin:8px 0;text-align:left">
+    <div style="font-weight:800;font-size:13px">${esc(tr('earn.commentExamplesTitle'))}</div>
+    <div style="font-size:12px;color:var(--text2,#b9b9c6);margin-bottom:6px">${esc(tr('earn.commentExamplesHint', { min }))}</div>
+    ${ai}${items}
+  </div>`;
+}
+
 function vModal() {
   const m = S.modal; if (!m) return '';
   const t = m.task;
   let action;
   if (m.status === 'done') {
-    action = `<p class="success-text">${esc(m.message)}</p><button class="btn" style="margin-top:12px" onclick="closeModal()">${tr('modal.done')}</button>`;
+    action = `<p class="success-text">${esc(m.message)}</p><button class="btn" style="margin-top:12px" data-act="closeModal">${tr('modal.done')}</button>`;
   } else {
     const label = m.status === 'verifying' ? tr('modal.verifying')
       : m.status === 'countdown' ? tr('modal.verifyIn', { s: m.countdown })
       : tr('modal.verify');
     action = `
-      <button class="btn secondary" onclick="modalOpenYouTube()">${tr('modal.open')}</button>
+      <button class="btn secondary" data-act="modalOpenYouTube">${tr('modal.open')}</button>
       ${m.status === 'countdown' ? `<div class="countdown">${m.countdown}s</div>` : ''}
-      <button class="btn" style="margin-top:10px" onclick="modalVerify()" ${m.status === 'ready' ? '' : 'disabled'}>${label}</button>
+      <button class="btn" style="margin-top:10px" data-act="modalVerify" ${m.status === 'ready' ? '' : 'disabled'}>${label}</button>
       ${m.status === 'idle' ? `<p class="hint" style="text-align:center">${tr('modal.openFirst')}</p>` : ''}
       ${m.error ? `<p class="error">${esc(m.error)}</p>` : ''}`;
   }
   return `
-  <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+  <div class="modal-backdrop" data-act="modalBackdrop">
     <div class="modal">
       <h2>${TASK_ICON[t.task_type] || ''} ${taskLabel(t.task_type)} — +${t.reward} 🪙</h2>
       <div class="meta" style="color:var(--text2);font-size:13px">${esc(t.channel_name || t.owner_name)}</div>
       <div class="steps">${tr('steps.' + t.task_type, { min: t.watch_minutes })}</div>
+      ${t.task_type === 'like_comment' && m.status !== 'done' ? vCommentHelp(m.help) : ''}
       ${m.status !== 'done' ? `<div style="font-size:12px;color:var(--gold);background:rgba(245,196,81,0.1);border-radius:10px;padding:10px;margin:10px 0;text-align:left;line-height:1.5">${tr('modal.clawbackWarning')}</div>` : ''}
       ${action}
     </div>
@@ -745,8 +832,10 @@ function vModal() {
 function vGrow() {
   const needsVideo = C.type !== 'subscribe';
   const needsChannel = ['subscribe', 'subscribe_like'].includes(C.type);
-  const chips = TASK_TYPES.map(t =>
-    `<button class="chip ${C.type === t ? 'active' : ''}" onclick="setCType('${t}')">${TASK_ICON[t]} ${taskLabel(t)}</button>`).join('');
+  const disabled = (S.config && Array.isArray(S.config.disabled_task_types)) ? S.config.disabled_task_types : [];
+  if (disabled.includes(C.type)) { const alt = TASK_TYPES.find(t => !disabled.includes(t)); if (alt) C.type = alt; }
+  const chips = TASK_TYPES.filter(t => !disabled.includes(t)).map(t =>
+    `<button class="chip ${C.type === t ? 'active' : ''}" data-act="setCType" data-a="${t}">${TASK_ICON[t]} ${taskLabel(t)}</button>`).join('');
   const myList = S.myTasks.length ? S.myTasks.map(t => `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -755,9 +844,9 @@ function vGrow() {
       </div>
       <div class="hint">${t.completions_count}/${t.total_slots} ${tr('grow.done')} · ${t.progress_pct}%</div>
       <div style="display:flex;gap:8px;margin-top:10px">
-        ${t.can_pause ? `<button class="btn small secondary" onclick="campaignAction(${t.id},'pause')">${tr('grow.pause')}</button>` : ''}
-        ${t.can_resume ? `<button class="btn small secondary" onclick="campaignAction(${t.id},'resume')">${tr('grow.resume')}</button>` : ''}
-        ${t.can_cancel ? `<button class="btn small danger-outline" onclick="campaignAction(${t.id},'cancel')">${tr('grow.cancel')}</button>` : ''}
+        ${t.can_pause ? `<button class="btn small secondary" data-act="campaignAction" data-a="${t.id}" data-b="pause">${tr('grow.pause')}</button>` : ''}
+        ${t.can_resume ? `<button class="btn small secondary" data-act="campaignAction" data-a="${t.id}" data-b="resume">${tr('grow.resume')}</button>` : ''}
+        ${t.can_cancel ? `<button class="btn small danger-outline" data-act="campaignAction" data-a="${t.id}" data-b="cancel">${tr('grow.cancel')}</button>` : ''}
       </div>
     </div>`).join('') : `<div class="empty">${tr('grow.none')}</div>`;
   return vHeader(tr('grow.title')) + `
@@ -765,19 +854,21 @@ function vGrow() {
     <div class="label">${tr('grow.type')}</div>
     <div class="chips">${chips}</div>
     ${needsChannel ? `<div class="label">${tr('grow.channelLabel')}</div>
-      ${S.channels.length ? `<select onchange="C.channelId=this.value;render()" style="width:100%">${S.channels.map(c => `<option value="${esc(String(c.id))}" ${String(C.channelId) === String(c.id) ? 'selected' : ''}>${esc(c.channel_name)}${c.subscriber_count != null ? ' · ' + c.subscriber_count + ' subs' : ''}</option>`).join('')}</select>` : `<p class="hint">${tr('grow.noChannelYet')}</p>`}
+      ${S.channels.length ? `<select data-model="C.channelId" data-on="render" style="width:100%">${S.channels.map(c => `<option value="${esc(String(c.id))}" ${String(C.channelId) === String(c.id) ? 'selected' : ''}>${esc(c.channel_name)}${c.subscriber_count != null ? ' · ' + c.subscriber_count + ' subs' : ''}</option>`).join('')}</select>` : `<p class="hint">${tr('grow.noChannelYet')}</p>`}
       <div style="display:flex;gap:8px;margin-top:8px">
-        <input type="text" placeholder="youtube.com/@handle" value="${esc(C.newChannelUrl)}" oninput="C.newChannelUrl=this.value" style="flex:1">
-        <button class="btn small secondary" style="white-space:nowrap" onclick="addChannelWeb()" ${C.addingChannel ? 'disabled' : ''}>${C.addingChannel ? tr('grow.adding') : '+ ' + tr('grow.addChannel')}</button>
+        <input type="text" placeholder="youtube.com/@handle" value="${esc(C.newChannelUrl)}" data-model="C.newChannelUrl" style="flex:1">
+        <button class="btn small secondary" style="white-space:nowrap" data-act="addChannelWeb" ${C.addingChannel ? 'disabled' : ''}>${C.addingChannel ? tr('grow.adding') : '+ ' + tr('grow.addChannel')}</button>
       </div>` : ''}
     ${needsVideo ? `<div class="label">${tr('grow.videoUrl')}</div>
-      <input id="c-video" type="url" placeholder="https://youtube.com/watch?v=…" value="${esc(C.videoUrl)}" oninput="C.videoUrl=this.value">` : ''}
+      <input id="c-video" type="url" placeholder="https://youtube.com/watch?v=…" value="${esc(C.videoUrl)}" data-model="C.videoUrl">` : ''}
+    ${C.type === 'like_comment' ? `<div class="label">${esc(tr('earn.pickCommentExamples'))}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">${(Array.isArray(window.I18N.t('earn.commentExamples')) ? window.I18N.t('earn.commentExamples') : []).map((s, id) => `<button type="button" class="chip ${C.exampleIds.includes(id) ? 'active' : ''}" style="text-align:left;white-space:normal" data-act="toggleCExample" data-a="${id}">${C.exampleIds.includes(id) ? '✓ ' : ''}${esc(s)}</button>`).join('')}</div>` : ''}
     ${C.type === 'watch' ? `<div class="label">${tr('grow.minutes')}</div>
-      <input id="c-mins" type="number" min="1" max="60" value="${esc(C.watchMins)}" oninput="C.watchMins=this.value;updatePrice()">` : ''}
+      <input id="c-mins" type="number" min="1" max="60" value="${esc(C.watchMins)}" data-model="C.watchMins" data-on="updatePrice">` : ''}
     <div class="label">${C.type === 'subscribe' ? tr('grow.howManySubs') : tr('grow.howManyCompletions')}</div>
-    <input id="c-slots" type="number" min="1" placeholder="10" value="${esc(C.slots)}" oninput="C.slots=this.value;updatePrice()">
+    <input id="c-slots" type="number" min="1" placeholder="10" value="${esc(C.slots)}" data-model="C.slots" data-on="updatePrice">
     <div class="pricebox" id="pricebox">${priceHTML()}</div>
-    <button class="btn" style="margin-top:14px" onclick="createCampaign()" ${C.creating ? 'disabled' : ''}>${C.creating ? tr('grow.creating') : tr('grow.create')}</button>
+    <button class="btn" style="margin-top:14px" data-act="createCampaign" ${C.creating ? 'disabled' : ''}>${C.creating ? tr('grow.creating') : tr('grow.create')}</button>
     ${C.error ? `<p class="error">${esc(C.error)}</p>` : ''}${C.ok ? `<p class="success-text">${esc(C.ok)}</p>` : ''}
     <div class="label" style="margin-top:26px">${tr('grow.mine')}</div>
     ${myList}
@@ -794,7 +885,7 @@ function vWallet() {
     </div>`).join('') : `<div class="empty">${tr('wallet.none')}</div>`;
   return vHeader(tr('wallet.title')) + `<div class="screen">
     ${notice}
-    <button class="btn" style="margin-bottom:12px" onclick="loadTab('buy')">💰 ${tr('buy.title')}</button>
+    <button class="btn" style="margin-bottom:12px" data-act="loadTab" data-a="buy">💰 ${tr('buy.title')}</button>
     <div class="card">${list}</div></div>`;
 }
 
@@ -808,21 +899,35 @@ function vBuy() {
         <div style="font-size:19px;font-weight:800;color:var(--gold)">🪙 ${p.total.toLocaleString()}</div>
         <div class="hint">${p.bonusPct ? `<b style="color:var(--success)">+${p.bonusPct}%</b> · ` : ''}$${usd} USDT</div>
       </div>
-      <button class="btn small" style="white-space:nowrap;min-width:104px" onclick="buyCoins(${usd})" ${B.busy ? 'disabled' : ''}>${busy ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
+      <button class="btn small" style="white-space:nowrap;min-width:104px" data-act="buyCoins" data-a="${usd}" ${B.busy ? 'disabled' : ''}>${busy ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
     </div>`;
   }).join('');
   const cu = parseInt(B.customUsd, 10) || 0;
   const cValid = cu >= 20;
   return vHeader(tr('buy.title')) + `
   <div class="screen">
-    <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('wallet')">← ${tr('buy.back')}</button>
-    <p class="hint" style="margin:12px 0 10px">${tr('buy.subtitle')}</p>
+    <button class="btn small secondary" style="display:inline-block;width:auto" data-act="loadTab" data-a="wallet">← ${tr('buy.back')}</button>
+    <div style="background:rgba(255,183,3,0.12);border:1px solid var(--warning);border-radius:12px;padding:12px 14px;margin:12px 0">
+      <div style="font-weight:800;color:var(--warning);font-size:12px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">⚠️ ${tr('buy.readFirst')}</div>
+      <div style="font-size:13.5px;color:var(--text2);line-height:1.5">${tr('buy.warnCrypto')}</div>
+      <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin-top:4px">${tr('buy.warnInstant')}</div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin:0 0 12px">
+      <div style="font-weight:800;font-size:14px;margin-bottom:8px">${tr('buy.howTitle')}</div>
+      <ol style="margin:0;padding-left:18px;color:var(--text2);font-size:13.5px;line-height:1.7">
+        <li>${tr('buy.howStep1')}</li>
+        <li>${tr('buy.howStep2')}</li>
+        <li>${tr('buy.howStep3')}</li>
+        <li>${tr('buy.howStep4')}</li>
+      </ol>
+      <div style="margin-top:10px;font-size:12.5px;color:var(--warning);line-height:1.5">${tr('buy.howWarn')}</div>
+    </div>
     ${cards}
     <div class="label">${tr('buy.custom')}</div>
     <div class="card">
-      <input id="custom-usd" type="number" min="20" step="1" inputmode="numeric" placeholder="20" value="${esc(String(B.customUsd || ''))}" oninput="updateCustomBuy()">
+      <input id="custom-usd" type="number" min="20" step="1" inputmode="numeric" placeholder="20" value="${esc(String(B.customUsd || ''))}" data-on="updateCustomBuy">
       <div id="custom-coins" style="margin-top:10px;font-size:14.5px">${cValid ? customCoinsHTML(cu) : `<span class="hint">${tr('buy.min')}</span>`}</div>
-      <button id="custom-buy-btn" class="btn" style="margin-top:12px" onclick="buyCoinsCustom()" ${(!cValid || B.busy) ? 'disabled' : ''}>${(B.busy === cu && cu) ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
+      <button id="custom-buy-btn" class="btn" style="margin-top:12px" data-act="buyCoinsCustom" ${(!cValid || B.busy) ? 'disabled' : ''}>${(B.busy === cu && cu) ? tr('buy.redirecting') : tr('buy.buyNow')}</button>
     </div>
     ${B.error ? `<p class="error">${esc(B.error)}</p>` : ''}
     <p class="hint" style="margin-top:14px">${tr('buy.secure')}</p>
@@ -834,7 +939,7 @@ function vProfile() {
   const L = window.I18N.LANGS, curLang = window.I18N.getLang();
   const flagImg = (cc) => `<img src="https://flagcdn.com/24x18/${cc}.png" width="22" height="16" alt="">`;
   const langMenu = Object.entries(L).map(([code, info]) =>
-    `<button onclick="changeLang('${code}')">${flagImg(info.cc)} ${esc(info.native)}</button>`).join('');
+    `<button data-act="changeLang" data-a="${code}">${flagImg(info.cc)} ${esc(info.native)}</button>`).join('');
   return vHeader(tr('profile.title')) + `
   <div class="screen">
     <div class="profile-head">
@@ -856,10 +961,10 @@ function vProfile() {
       <div class="row"><span class="l">${tr('common.privacy')}</span><a class="v" href="https://viralboostnow.com/privacy.html" target="_blank" rel="noopener">↗</a></div>
       <div class="row"><span class="l">${tr('common.terms')}</span><a class="v" href="https://viralboostnow.com/terms.html" target="_blank" rel="noopener">↗</a></div>
     </div>
-    <button class="btn" style="margin-top:8px" onclick="loadTab('referral')">🎁 ${tr('referral.invite')}</button>
-    ${u.is_admin ? `<button class="btn" style="margin-top:8px" onclick="loadTab('admin')">🛠 ${tr('profile.admin')}</button>` : ''}
-    <button class="btn secondary" style="margin-top:8px" onclick="signOut()">${tr('profile.signOut')}</button>
-    <button class="btn danger-outline" style="margin-top:26px" onclick="deleteAccount()">${tr('profile.deleteAccount')}</button>
+    <button class="btn" style="margin-top:8px" data-act="loadTab" data-a="referral">🎁 ${tr('referral.invite')}</button>
+    ${u.is_admin ? `<button class="btn" style="margin-top:8px" data-act="loadTab" data-a="admin">🛠 ${tr('profile.admin')}</button>` : ''}
+    <button class="btn secondary" style="margin-top:8px" data-act="signOut">${tr('profile.signOut')}</button>
+    <button class="btn danger-outline" style="margin-top:26px" data-act="deleteAccount">${tr('profile.deleteAccount')}</button>
   </div>`;
 }
 
@@ -870,7 +975,7 @@ function vReferral() {
   const refereeBonus = r.referee_bonus ?? 100;
   return vHeader(tr('referral.title')) + `
   <div class="screen">
-    <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('profile')">← ${tr('common.back')}</button>
+    <button class="btn small secondary" style="display:inline-block;width:auto" data-act="loadTab" data-a="profile">← ${tr('common.back')}</button>
     <div class="card" style="text-align:center;padding:24px">
       <div style="font-size:42px">🎁</div>
       <p class="hint" style="margin:8px 0 16px">${tr('referral.subtitle', { referrer: referrerBonus, referee: refereeBonus })}</p>
@@ -878,7 +983,7 @@ function vReferral() {
       <div style="font-size:32px;font-weight:800;color:var(--gold);letter-spacing:6px;margin:6px 0">${esc(code)}</div>
       ${r.code ? `<div class="hint" style="margin-top:6px;word-break:break-all;opacity:.8">${esc(referralLink(code))}</div>` : ''}
       <div style="margin-top:12px;font-size:12.5px;color:var(--gold);background:rgba(245,196,81,.1);border-radius:10px;padding:10px;line-height:1.5">${tr('referral.condition')}</div>
-      <button class="btn" style="margin-top:10px" onclick="shareReferral()">${tr('referral.share')}</button>
+      <button class="btn" style="margin-top:10px" data-act="shareReferral">${tr('referral.share')}</button>
     </div>
     <div style="display:flex;gap:10px">
       <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${r.rewarded ?? 0}</div><div class="hint">${tr('referral.joined')}</div></div>
@@ -917,8 +1022,8 @@ function vHome() {
       <div class="card" style="flex:1;text-align:center;margin-bottom:0"><div style="font-size:22px;font-weight:800">${u.tasks_completed ?? 0}</div><div class="hint">${tr('home.completed')}</div></div>
     </div>
     <div style="display:flex;gap:10px;margin-top:10px">
-      <button class="btn" style="flex:1" onclick="loadTab('earn')">${tr('home.earnCoins')}</button>
-      <button class="btn secondary" style="flex:1" onclick="loadTab('grow')">${tr('home.getSubs')}</button>
+      <button class="btn" style="flex:1" data-act="loadTab" data-a="earn">${tr('home.earnCoins')}</button>
+      <button class="btn secondary" style="flex:1" data-act="loadTab" data-a="grow">${tr('home.getSubs')}</button>
     </div>
     <div class="label" style="margin-top:22px">${tr('home.recentActivity')}</div>
     <div class="card">${recent.length ? recent.map(tx => `
@@ -932,39 +1037,52 @@ function vAdmin() {
   const tile = (label, val) => `<div class="card" style="flex:1;min-width:110px;text-align:center;margin-bottom:0"><div style="font-size:20px;font-weight:800">${val ?? 0}</div><div class="hint">${label}</div></div>`;
   const fields = ADMIN_FIELDS.map(([k, label]) => `
     <div class="row"><span class="l">${label}</span>
-      <input type="number" min="0" value="${esc(A.settings[k] ?? '')}" oninput="A.settings['${k}']=this.value" style="width:90px;padding:8px;text-align:right"></div>`).join('');
+      <input type="number" min="0" value="${esc(A.settings[k] ?? '')}" data-model="A.settings.${k}" style="width:90px;padding:8px;text-align:right"></div>`).join('');
   const users = A.users.map(u => `
     <div class="card">
       <div><b>${esc(u.name || u.email)}</b> <span style="color:var(--gold)">🔔 ${u.subscriber_count ?? 0} subs</span>
         <div class="hint">${esc(u.email)} · ${esc(u.role)} · 🪙${u.coins} · ${u.tasks_completed} done${u.is_banned ? ' · ⛔ banned' : ''}${u.youtube_channel_id ? ` · <a href="https://www.youtube.com/channel/${esc(u.youtube_channel_id)}" target="_blank" rel="noopener">channel ↗</a>` : ''}</div></div>
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-        ${u.is_banned ? `<button class="btn small secondary" onclick="adminBanUser('${jsAttr(u.email)}',true)">Unban</button>`
-                      : `<button class="btn small danger-outline" onclick="adminBanUser('${jsAttr(u.email)}',false)">Ban</button>`}
-        ${u.role === 'premium' ? `<button class="btn small secondary" onclick="adminPromoteUser('${jsAttr(u.email)}','user')">↓ User</button>`
-                               : `<button class="btn small secondary" onclick="adminPromoteUser('${jsAttr(u.email)}','premium')">↑ Premium</button>`}
+        ${u.is_banned ? `<button class="btn small secondary" data-act="adminBanUser" data-a="${esc(u.email)}" data-b="1">Unban</button>`
+                      : `<button class="btn small danger-outline" data-act="adminBanUser" data-a="${esc(u.email)}" data-b="0">Ban</button>`}
+        ${u.role === 'premium' ? `<button class="btn small secondary" data-act="adminPromoteUser" data-a="${esc(u.email)}" data-b="user">↓ User</button>`
+                               : `<button class="btn small secondary" data-act="adminPromoteUser" data-a="${esc(u.email)}" data-b="premium">↑ Premium</button>`}
       </div>
     </div>`).join('');
   return vHeader('🛠 Admin') + `
   <div class="screen">
-    <button class="btn small secondary" style="display:inline-block;width:auto" onclick="loadTab('profile')">← Back</button>
+    <button class="btn small secondary" style="display:inline-block;width:auto" data-act="loadTab" data-a="profile">← Back</button>
     <div class="label" style="margin-top:14px">Stats</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${tile('Users', s.users)}${tile('Active campaigns', s.active_tasks)}${tile('Coins in circ.', s.total_coins_in_circulation)}${tile('Banned', s.banned_users)}
     </div>
     <div class="label" style="margin-top:18px">API mode (currently: ${esc(A.mode)})</div>
     <div style="display:flex;gap:8px">
-      <button class="btn ${A.mode === 'live' ? '' : 'secondary'}" style="flex:1" onclick="adminSetMode('live')">Live (API verify)</button>
-      <button class="btn ${A.mode === 'degraded' ? '' : 'secondary'}" style="flex:1" onclick="adminSetMode('degraded')">Honor mode</button>
+      <button class="btn ${A.mode === 'live' ? '' : 'secondary'}" style="flex:1" data-act="adminSetMode" data-a="live">Live (API verify)</button>
+      <button class="btn ${A.mode === 'degraded' ? '' : 'secondary'}" style="flex:1" data-act="adminSetMode" data-a="degraded">Honor mode</button>
     </div>
     <div class="label" style="margin-top:18px">Economy & limits</div>
     <div class="card">${fields}</div>
-    <button class="btn" onclick="adminSave()" ${A.saving ? 'disabled' : ''}>${A.saving ? 'Saving…' : 'Save settings'}</button>
+    <div class="label" style="margin-top:18px">Task types (tap to enable / disable)</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      ${TASK_TYPES.map(t => { const off = (A.settings.disabled_task_types || []).includes(t);
+        return `<button class="chip ${off ? '' : 'active'}" data-act="adminToggleType" data-a="${t}">${off ? '🚫' : '✅'} ${taskLabel(t)}</button>`; }).join('')}
+    </div>
+    <div class="label" style="margin-top:14px">Daily cap per type (0 = unlimited)</div>
+    <div class="card">${TASK_TYPES.map(t => `<div class="row"><span class="l">${taskLabel(t)}</span><input type="number" min="0" value="${esc(String((A.settings.daily_cap_by_type || {})[t] || 0))}" data-on="dailyCap" data-a="${t}" style="width:90px;padding:8px;text-align:right"></div>`).join('')}</div>
+    <div class="label" style="margin-top:14px">Maintenance banner (empty = none)</div>
+    <textarea data-model="A.settings.maintenance_message" style="width:100%;min-height:52px;padding:8px;box-sizing:border-box" placeholder="Shown as a banner to all users">${esc(A.settings.maintenance_message || '')}</textarea>
+    ${A.dashboard ? `<div class="label" style="margin-top:18px">Campaigns by type (active · slots left)</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${(A.dashboard.campaigns_by_type || []).map(c => tile(taskLabel(c.task_type), `${c.active} · ${c.remaining_slots}`)).join('')}</div>
+      <div class="label" style="margin-top:14px">Today</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${tile('New users', A.dashboard.users?.new_today)}${tile('Active/week', A.dashboard.users?.active_week)}${tile('Earned', A.dashboard.economy?.earned_today)}${tile('Spent', A.dashboard.economy?.spent_today)}</div>` : ''}
+    <button class="btn" style="margin-top:14px" data-act="adminSave" ${A.saving ? 'disabled' : ''}>${A.saving ? 'Saving…' : 'Save settings'}</button>
     ${A.err ? `<p class="error">${esc(A.err)}</p>` : ''}${A.msg ? `<p class="success-text">${esc(A.msg)}</p>` : ''}
     <div class="label" style="margin-top:22px">Users</div>
     <div style="display:flex;gap:8px">
-      <input type="text" placeholder="Search email…" value="${esc(A.userQuery)}" oninput="A.userQuery=this.value" style="flex:1">
-      <button class="btn small secondary" style="white-space:nowrap" onclick="adminSearchUsers()">Search</button>
-      <button class="btn small" style="white-space:nowrap" onclick="adminTopCreators()">🔔 Top creators</button>
+      <input type="text" placeholder="Search email…" value="${esc(A.userQuery)}" data-model="A.userQuery" style="flex:1">
+      <button class="btn small secondary" style="white-space:nowrap" data-act="adminSearchUsers">Search</button>
+      <button class="btn small" style="white-space:nowrap" data-act="adminTopCreators">🔔 Top creators</button>
     </div>
     ${A.userErr ? `<p class="error">${esc(A.userErr)}</p>` : ''}
     <div style="margin-top:10px">${users || `<div class="hint">Search for a user by email.</div>`}</div>
@@ -974,7 +1092,7 @@ function vAdmin() {
 function vTabbar() {
   const tabs = [['home', '🏠'], ['earn', '📋'], ['grow', '📈'], ['wallet', '🪙'], ['profile', '👤']];
   return `<div class="tabbar">${tabs.map(([k, i]) =>
-    `<button class="${S.tab === k ? 'active' : ''}" onclick="loadTab('${k}')"><span class="ico">${i}</span>${tr('tabs.' + k)}</button>`).join('')}</div>`;
+    `<button class="${S.tab === k ? 'active' : ''}" data-act="loadTab" data-a="${k}"><span class="ico">${i}</span>${tr('tabs.' + k)}</button>`).join('')}</div>`;
 }
 
 // ── glue ──────────────────────────────────────────────────────────────────────
@@ -985,14 +1103,91 @@ function render() {
   const root = document.getElementById('app');
   if (!S.token) { root.innerHTML = vLogin(); return; }
   const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin, buy: vBuy, referral: vReferral }[S.tab] || vEarn;
-  root.innerHTML = view() + vTabbar() + vModal();
+  const maint = (S.config && S.config.maintenance_message)
+    ? `<div style="background:rgba(245,196,81,.15);color:var(--gold,#f5c451);padding:10px 14px;text-align:center;font-weight:700;font-size:13px">🚧 ${esc(S.config.maintenance_message)}</div>` : '';
+  root.innerHTML = maint + view() + vTabbar() + vModal();
 }
 
-// expose handlers used in inline HTML
-Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, S, buyCoins, buyCoinsCustom, updateCustomBuy, shareReferral,
+// ── event delegation ──────────────────────────────────────────────────────────
+// There are NO inline on* handlers in the rendered HTML, so the CSP drops
+// script-src 'unsafe-inline'. Clickable elements carry data-act (+ data-a / data-b
+// string params); form fields carry data-model (writes this.value into the store)
+// and/or data-on (a follow-up action). A single set of delegated listeners on
+// `document` survives every #app innerHTML re-render and also covers the body-level
+// overlays (modal, watch player, themed dialogs).
+const ACTIONS = {
+  signIn,
+  openTask: (el) => openTask(el.dataset.a),
+  setFilter: (el) => setFilter(el.dataset.a || null),
+  closeModal,
+  modalBackdrop: (el, e) => { if (e.target === el) closeModal(); },
+  modalOpenYouTube,
+  modalVerify,
+  loadTab: (el) => loadTab(el.dataset.a),
+  campaignAction: (el) => campaignAction(Number(el.dataset.a), el.dataset.b),
+  createCampaign,
+  addChannelWeb,
+  buyCoins: (el) => buyCoins(Number(el.dataset.a)),
+  buyCoinsCustom,
+  changeLang: (el) => changeLang(el.dataset.a),
+  shareReferral,
+  toggleCExample: (el) => toggleCExample(Number(el.dataset.a)),
+  setCType: (el) => setCType(el.dataset.a),
+  signOut,
+  deleteAccount,
+  adminToggleType: (el) => adminToggleType(el.dataset.a),
+  adminSave,
+  adminSetMode: (el) => adminSetMode(el.dataset.a),
+  adminSearchUsers,
+  adminTopCreators,
+  adminBanUser: (el) => adminBanUser(el.dataset.a, el.dataset.b === '1'),
+  adminPromoteUser: (el) => adminPromoteUser(el.dataset.a, el.dataset.b),
+};
+const INPUT_ACTIONS = {
+  updatePrice,
+  render,
+  updateCustomBuy,
+  dailyCap: (el) => { A.settings.daily_cap_by_type = Object.assign({}, A.settings.daily_cap_by_type, { [el.dataset.a]: parseInt(el.value, 10) || 0 }); },
+};
+function _setModel(el) {
+  const path = el.dataset.model; if (!path) return;
+  const v = el.value;
+  if (path.startsWith('A.settings.')) A.settings[path.slice(11)] = v;
+  else if (path.startsWith('A.')) A[path.slice(2)] = v;
+  else if (path.startsWith('C.')) C[path.slice(2)] = v;
+  else if (path.startsWith('B.')) B[path.slice(2)] = v;
+}
+function _delegateClick(e) {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;                 // clicks on the WP/dialog overlays (own .onclick) fall through
+  const fn = ACTIONS[el.dataset.act];
+  if (fn) fn(el, e);
+}
+function _delegateInput(e) {
+  const el = e.target;
+  if (!el || !el.dataset) return;
+  if (el.dataset.model) _setModel(el);
+  const on = el.dataset.on;
+  if (on && INPUT_ACTIONS[on]) INPUT_ACTIONS[on](el);
+}
+document.addEventListener('click', _delegateClick);
+document.addEventListener('input', _delegateInput);
+document.addEventListener('change', _delegateInput);
+
+// Legacy global exposure (no longer required now handlers are delegated, kept harmless).
+Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, S, buyCoins, buyCoinsCustom, updateCustomBuy, shareReferral, toggleCExample, adminToggleType,
   gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {
+  // Pull live pricing so the grow-tab estimate matches what an admin has configured
+  // (server stays authoritative for the actual charge). Static SLOT_COSTS is the
+  // fallback if this fails / the user isn't signed in yet.
+  api.tiers().then((p) => {
+    if (p && p.slot_costs) Object.assign(SLOT_COSTS, p.slot_costs);
+    if (p && p.reward_per_type) Object.assign(REWARDS, p.reward_per_type);
+    if (p && Number.isFinite(p.watch_extra_min_cost)) WATCH_EXTRA.cost = p.watch_extra_min_cost;
+    if (S.tab === 'grow') render();
+  }).catch(() => {});
   const params = new URLSearchParams(location.search);
   // Referral link: ?ref=CODE pre-fills the referral field so the invitee doesn't type.
   const ref = params.get('ref');

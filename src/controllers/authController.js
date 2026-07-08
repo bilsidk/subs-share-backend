@@ -53,7 +53,14 @@ const googleSignIn = async (req, res, next) => {
     if (!idTokenToVerify) return res.status(400).json({ error: 'idToken required' });
 
     const ticket = await client.verifyIdToken({ idToken: idTokenToVerify, audience: process.env.GOOGLE_CLIENT_ID });
-    const { sub: google_id, email, name, picture: avatar } = ticket.getPayload();
+    const { sub: google_id, email, name, picture: avatar, email_verified } = ticket.getPayload();
+
+    // Owner elevation keys off the email, so never trust an email Google flags as
+    // unverified. email_verified===false means Google could not confirm the address;
+    // a missing/undefined claim (some federated tokens) is left as-is to avoid locking
+    // out legitimate accounts (normal gmail sign-ins are always verified).
+    if (email_verified === false)
+      return res.status(403).json({ error: 'Your Google email is not verified. Verify it with Google, then sign in again.', code: 'EMAIL_UNVERIFIED' });
 
     const result = await pool.query(
       `INSERT INTO users (google_id, email, name, avatar, youtube_access_token, youtube_refresh_token, youtube_token_expiry)
