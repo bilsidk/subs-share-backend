@@ -26,12 +26,15 @@ const DEFAULTS = {
   house_margin: 3,
   completion_delay_seconds: 45,
   max_campaigns_per_user: 5,
-  max_watch_per_day: 100,    // watch tasks a user can complete per day (admin-editable; was a hardcoded 20)
-  // Admin controls — DEFAULT-SAFE: empty list = every task type enabled; empty object
-  // = no per-type daily cap; empty string = no maintenance banner. Missing settings
-  // therefore change NOTHING, so this is backwards-compatible on first deploy.
+  max_watch_per_day: 0,      // 0 = NO watch-specific daily cap (owner decision 2026-07-09).
+                             // Watch stays bounded by the GLOBAL daily_limit_user/premium above,
+                             // the 40/hr velocity cap, real-time watch spacing, and earned_targets.
+  // Admin controls — empty list = every task type enabled; empty string = no banner.
   disabled_task_types: [],   // e.g. ['subscribe'] hides+blocks that type app-wide
-  daily_cap_by_type: {},     // e.g. { subscribe: 10 } caps subscribe tasks/user/day (0/absent = unlimited)
+  // Per-type daily caps (owner decision 2026-07-09): subscribe 20/day, like 30/day,
+  // like_comment 30/day; watch uncapped (see max_watch_per_day). Values the admin saves
+  // in app_settings override PER KEY; set a key to 0 for unlimited.
+  daily_cap_by_type: { subscribe: 20, like: 30, like_comment: 30 },
   maintenance_message: '',   // non-empty = shown as a banner in the app
 };
 

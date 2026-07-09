@@ -24,6 +24,20 @@ module.exports = {
 
   COMMENT_BONUS: 4,
 
+  // Platform economy nudge — steer users to the lower-fee WEB version. Web = base (these
+  // values, unchanged). MOBILE pays a bit more per campaign slot and earns a bit less per
+  // task, per type. Watch is gentler (its tiny base rounds harshly): no earn penalty +
+  // mild cost bump. Applied server-side by request origin (src/lib/platform.js); existing
+  // campaigns keep their locked slot_cost. Set a type's rate to 0 to disable that lever.
+  MOBILE_SURCHARGE_BY_TYPE: { subscribe: 0.20, like: 0.20, like_comment: 0.20, subscribe_like: 0.20, watch: 0 },
+  MOBILE_PENALTY_BY_TYPE:   { subscribe: 0.15, like: 0.15, like_comment: 0.15, subscribe_like: 0.15, watch: 0 },
+  // Watch uses FLAT per-slot offsets instead of percentages: its price composes per
+  // minute (base + 1/extra min), and a percentage of the composed total can't be shown
+  // exactly by a client that composes per-part — flat offsets keep shown = charged =
+  // paid EXACT at every duration on every client. Web better both ways at all durations.
+  MOBILE_WATCH_COST_FLAT: 1,   // mobile watch slot costs +1 coin at any duration
+  MOBILE_WATCH_EARN_FLAT: 1,   // mobile watch payout is −1 coin at any duration
+
   // like_comment quality floor — the posted comment must have at least this many
   // words OR characters (the char fallback covers space-less languages: zh/ja/th).
   // Verified against the real comment text returned by the YouTube API.
@@ -53,9 +67,16 @@ module.exports = {
 
   MIN_SECONDS_BETWEEN_TASKS: 20,
   MAX_TASKS_PER_HOUR: 40,
-  // Watch tasks can't be verified against a YouTube API, so cap how many a single
-  // user can bank per day to bound honor-system abuse.
-  MAX_WATCH_PER_DAY: 100,   // hard fallback if the admin setting is unset (admin setting default is also 100)
+  // Types that share ONE daily bucket (owner decision 2026-07-09): like and
+  // like_comment count TOGETHER against the cap (e.g. 18 likes + 12 like_comments
+  // = 30 → both types blocked for the day). A type not listed counts alone.
+  DAILY_CAP_GROUP: { like: ['like', 'like_comment'], like_comment: ['like', 'like_comment'] },
+
+  // Watch-specific daily cap fallback — 0 = no watch-specific cap (owner decision
+  // 2026-07-09). Honor-system abuse is still bounded by the GLOBAL per-role daily limit
+  // (settings daily_limit_user/premium), MAX_TASKS_PER_HOUR, the real-time watch
+  // spacing/time-floor, and the once-per-video earned_targets ledger.
+  MAX_WATCH_PER_DAY: 0,
   MAX_ACCOUNTS_PER_DEVICE: 3,
   RECLAIMS_BEFORE_BAN: 3,
   TRUST_FLOOR_BAN: 25,

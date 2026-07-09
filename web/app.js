@@ -23,8 +23,9 @@ const taskLabel = (type) => tr('task.' + type);
 function changeLang(lang) { window.I18N.setLang(lang); render(); }
 // Per-view document title — nicer history/UX and a small SPA-route SEO signal (the
 // static <title> still covers non-JS crawlers).
-const TAB_TITLES = { home: 'Home', earn: 'Earn Coins', grow: 'Grow Your Channel', wallet: 'Wallet', buy: 'Buy Coins', referral: 'Invite Friends', profile: 'Profile', admin: 'Admin' };
-function setDocTitle(tab) { document.title = (TAB_TITLES[tab] ? TAB_TITLES[tab] + ' · ' : '') + 'SubsShare — Grow your YouTube channel'; }
+// Localize the browser-tab title from EXISTING i18n keys (no new keys needed).
+const TAB_TITLE_KEYS = { home: 'tabs.home', earn: 'tabs.earn', grow: 'tabs.grow', wallet: 'tabs.wallet', buy: 'buy.title', referral: 'referral.title', profile: 'tabs.profile', admin: 'profile.admin' };
+function setDocTitle(tab) { const k = TAB_TITLE_KEYS[tab]; const name = k ? tr(k) : ''; document.title = (name ? name + ' · ' : '') + 'SubsShare'; }
 
 // ── state ─────────────────────────────────────────────────────────────────────
 const S = {
@@ -89,7 +90,7 @@ const api = {
   tasks: (type) => req('GET', '/tasks' + (type ? '?type=' + encodeURIComponent(type) : '')),
   myTasks: () => req('GET', '/tasks/my'),
   createTask: (d) => req('POST', '/tasks', d),
-  start: (id) => reqRetry('POST', `/tasks/${id}/start`).catch(() => {}), // server-stamps the start time (retried through blips)
+  start: (id) => reqRetry('POST', `/tasks/${id}/start`), // server-stamps the start; may reject 409 (ALREADY_EARNED / CAMPAIGN_*) — callers gate on it before any real work
   verify: (id, startedAt) => req('POST', `/tasks/${id}/verify`, { started_at: startedAt, device_id: deviceId(), platform: 'web' }),
   commentHelp: (id, lang) => req('GET', `/tasks/${id}/comment-help?lang=${encodeURIComponent(lang || 'en')}`),
   pause: (id) => req('PATCH', `/tasks/${id}/pause`),
@@ -297,7 +298,7 @@ async function loadTab(tab) {
 }
 
 // ── verify flow ───────────────────────────────────────────────────────────────
-function openTask(taskId) {
+async function openTask(taskId) {
   // Look the task up by id rather than trusting a blob serialized into the DOM —
   // avoids injecting server data into an inline handler attribute.
   const task = S.tasks.find(t => String(t.id) === String(taskId));
@@ -305,6 +306,20 @@ function openTask(taskId) {
   // Watch tasks play inside the app via the embedded YouTube player (timer bound to
   // real playback). Everything else uses the open-YouTube modal.
   if (task.task_type === 'watch') { openWatchPlayer(task); return; }
+  // Confirm eligibility server-side BEFORE showing the do-the-action modal: if the target
+  // was already earned (stale feed) or the campaign is paused/cancelled/full, bail now so
+  // the user never does unpaid work — drop the dead card and refresh the list.
+  try {
+    await api.start(task.id);
+  } catch (e) {
+    if (['ALREADY_EARNED', 'ALREADY_COMPLETED', 'CAMPAIGN_FULL', 'CAMPAIGN_PAUSED', 'CAMPAIGN_CANCELLED', 'CAMPAIGN_UNAVAILABLE'].includes(e.code)) {
+      S.tasks = S.tasks.filter(t => t.id !== task.id); render();
+      showAlert(e.message || tr('modal.unavailable'));
+      api.tasks(S.taskFilter).then(list => { S.tasks = list; render(); }).catch(() => {});
+      return;
+    }
+    // transient/other → proceed; the /verify NOT_STARTED path re-stamps and waits.
+  }
   S.modal = { task, status: 'idle', countdown: 0, startedAt: null, error: '', message: '', help: null };
   render();
   // For like+comment, load what-to-comment help (owner templates + optional AI example).
@@ -353,7 +368,11 @@ function wpStyles() {
   .wp-primary{padding:14px;border-radius:12px;border:none;background:var(--primary,#6C63FF);color:#fff;font-weight:800;font-size:15px;cursor:pointer}
   .wp-primary:disabled{opacity:.5;cursor:default}
   .wp-skip{padding:8px;background:none;border:none;color:var(--text2,#b9b9c6);font-weight:600;font-size:13px;cursor:pointer}
-  .wp-auto{padding:8px;background:none;border:none;color:var(--text2,#b9b9c6);font-weight:700;font-size:14px;cursor:pointer}
+  .wp-auto{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:8px 4px;background:none;border:none;color:var(--text,#fff);font-weight:700;font-size:14px;cursor:pointer}
+  .wp-toggle{width:46px;height:28px;border-radius:14px;background:var(--bg,#0b0b12);border:1px solid var(--border,#2a2a38);display:flex;align-items:center;padding:0 3px;flex-shrink:0;transition:background .15s}
+  .wp-toggle-knob{width:20px;height:20px;border-radius:10px;background:#fff;transition:margin-left .15s}
+  .wp-auto.wp-on .wp-toggle{background:var(--primary,#6C63FF);border-color:var(--primary,#6C63FF)}
+  .wp-auto.wp-on .wp-toggle-knob{margin-left:auto}
   .wp-sw{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
   .wp-sw-card{width:100%;max-width:360px;background:var(--card,#14141c);border:1px solid var(--border,#2a2a38);border-radius:20px;padding:24px;text-align:center;display:flex;flex-direction:column;gap:10px;align-items:center}
   .wp-sw-title{font-size:18px;font-weight:800;color:var(--text,#fff)}
@@ -377,7 +396,7 @@ async function openWatchPlayer(task) {
     el.innerHTML = `<div class="wp-card"><div class="wp-head"><button class="wp-close">✕</button><div class="wp-title"></div><div class="wp-reward"></div></div>
       <div class="wp-player"><div id="wp-yt"></div></div>
       <div class="wp-body"><div class="wp-track"><div class="wp-fill"></div></div><div class="wp-time"></div><div class="wp-status"></div>
-      <button class="wp-primary"></button><button class="wp-skip"></button><button class="wp-auto"></button></div></div>`;
+      <button class="wp-primary"></button><button class="wp-skip"></button><button class="wp-auto"><span class="wp-auto-label"></span><span class="wp-toggle"><span class="wp-toggle-knob"></span></span></button></div></div>`;
     document.body.appendChild(el); WP.el = el;
     el.querySelector('.wp-close').onclick = wpClose;
     el.querySelector('.wp-primary').onclick = () => { if (WP.claimed) wpNext(); else wpClaim(); };
@@ -390,12 +409,23 @@ async function openWatchPlayer(task) {
   wpLoad();
   WP.opening = false;
 }
-function wpLoad() {
+async function wpLoad() {
   const t = wpCurrent(); if (!t) return wpClose();
   WP.watched = 0; WP.claimed = false; WP.playing = false;
   if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
   WP.required = Math.max(1, (parseInt(t.watch_minutes, 10) || 1) * 60);
-  api.start(t.id);
+  // Confirm eligibility before playing — don't make the user watch a video they can't be
+  // paid for (already earned / campaign gone); skip to the next task on a terminal reject.
+  try {
+    await api.start(t.id);
+  } catch (e) {
+    if (['ALREADY_EARNED', 'ALREADY_COMPLETED', 'CAMPAIGN_FULL', 'CAMPAIGN_PAUSED', 'CAMPAIGN_CANCELLED', 'CAMPAIGN_UNAVAILABLE'].includes(e.code)) {
+      showAlert(e.message || tr('modal.unavailable'));
+      return wpNext();
+    }
+    // transient/other → proceed; /verify NOT_STARTED re-stamps and waits.
+  }
+  if (!WP.el) return; // player was closed during the await
   // Reset the primary button back to the claim/next delegate — a previous video's
   // embed-error handler may have hijacked it to "open on YouTube".
   WP.el.querySelector('.wp-primary').onclick = () => { if (WP.claimed) wpNext(); else wpClaim(); };
@@ -440,7 +470,7 @@ function wpUpdate() {
   skip.style.display = (WP.queue.length > 1 && !WP.claimed) ? 'block' : 'none';
   skip.textContent = tr('watch.skipToNext');
   const auto = WP.el.querySelector('.wp-auto');
-  if (auto) { auto.textContent = (WP.auto ? '☑ ' : '☐ ') + tr('watch.autoplay'); auto.style.display = WP.claimed ? 'none' : 'block'; }
+  if (auto) { const lbl = auto.querySelector('.wp-auto-label'); if (lbl) lbl.textContent = tr('watch.autoplay'); auto.classList.toggle('wp-on', WP.auto); auto.style.display = WP.claimed ? 'none' : 'flex'; }
   // Auto-claim the instant the full required watch time is reached.
   if (WP.auto && done && !WP.claimed && !WP.claiming) wpClaim();
 }
@@ -514,7 +544,7 @@ function modalOpenYouTube() {
   if (!url) { m.error = tr('modal.invalidLink'); render(); return; }
   window.open(url, '_blank', 'noopener');
   if (m.status === 'idle') {
-    api.start(m.task.id);            // server records the real start time
+    api.start(m.task.id).catch(() => {}); // re-stamp the real start time (eligibility already gated in openTask)
     m.startedAt = Date.now();        // kept as fallback for the delay UI
     m.status = 'countdown'; m.countdown = COMPLETION_DELAY;
     countdownTimer = setInterval(() => {
@@ -536,6 +566,10 @@ async function modalVerify() {
     m.message = res.message || `+${res.total_coins ?? res.coins_earned} coins`;
     api.me().then(d => { S.user = d; render(); }).catch(() => {});
     S.tasks = S.tasks.filter(t => t.id !== m.task.id);
+    // Refetch the feed so any sibling task on the SAME target (e.g. a like_comment on a
+    // video whose like we just earned) is filtered out server-side and can't be done for
+    // free from a now-stale list.
+    api.tasks(S.taskFilter).then(list => { S.tasks = list; render(); }).catch(() => {});
   } catch (e) {
     const code = e.data?.code;
     if (code === 'NOT_STARTED') {

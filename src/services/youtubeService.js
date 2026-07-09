@@ -87,7 +87,9 @@ async function verifyComment(userId, videoId) {
   const authorChannelId = userRow.rows[0]?.youtube_channel_id;
   if (!authorChannelId) return { found: false, reason: 'no_channel_id', exhausted: false };
 
-  const MAX_PAGES = 5; // up to ~500 most-recent comments
+  const MAX_PAGES = 10; // up to ~1000 most-recent comments. A freshly-posted comment is
+  // newest-first (order:'time'), so this deep margin keeps a genuine comment verifiable
+  // even on a busy video, while a conclusive not-found (exhausted) still means absent.
   let pageToken;
   let exhausted = false;
   for (let page = 0; page < MAX_PAGES; page++) {

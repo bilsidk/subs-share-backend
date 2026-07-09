@@ -3,7 +3,7 @@
 _Audit date: 2026-07-04. Scope: `SubsShare-Backend/src` (the live Railway backend, `subs-share-backend-production.up.railway.app`). Mobile app on Play Store consumes this API — all fixes below are backend-only and deploy via master → Railway with no app update needed._
 
 ## Context from chat
-- Two apps in `D:\react`: **SubsShare** (this one) and **CreatorHub/CreatorMatch** (separate, not audited).
+- **CreatorHub** and **CreatorMatch** were earlier names/versions of **SubsShare** — same project, NOT separate apps. (A stale CreatorMatch-branded `terms.html` was still live at `viralboostnow.com/terms.html`; replaced with the SubsShare version 2026-07-09.)
 - "Old" SubsShare = the `subs/` folder tree. Newer full rewrite = `subs/SubsShare` (mobile, native android/ios) + `subs/SubsShare-Backend` (this API). Live backend runs the newer code.
 - YouTube Shorts ARE accepted: `youtubeService.parseVideoId()` matches `watch?v=`, `youtu.be/`, and `youtube.com/shorts/`, plus bare 11-char ID. Web input has no restriction; tasks render as `watch?v=<id>` which still plays Shorts.
 - Completions are never re-shown to a user (feed excludes by `task_id` via `LEFT JOIN completions ... co.id IS NULL`; dup check returns 409). Reclaimed coins keep the completion row. Audit re-verifies via YouTube API: quick 2h, deep 48h, re-audit every 72h up to MAX_AUDITS=3.

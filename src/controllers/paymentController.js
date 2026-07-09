@@ -4,6 +4,7 @@ const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
 const googlePlay = require('../services/googlePlayService');
 const { MIN_PURCHASE_USD, calcPurchase, REWARDS, WATCH_COST_PER_EXTRA_MIN, WATCH_REWARD_PER_EXTRA_MIN, COMMENT_BONUS } = require('../config');
 const settings = require('../services/settingsService');
+const { isMobileRequest, mobileCampaignCost, mobileEarnPayout } = require('../lib/platform');
 
 // Only let the client choose the post-payment return origin from a known list,
 // so the success/cancel redirect can't be turned into an open redirect.
@@ -22,26 +23,44 @@ function resolveReturnBase(url) {
 
 async function getTiers(req, res) {
   const s = await settings.getSettings();
+  const margin = s.house_margin ?? 3;
+  const rewardPerType = {
+    subscribe:      s.coins_subscribe      ?? 12,
+    like:           s.coins_like           ?? 6,
+    like_comment:   s.coins_like_comment   ?? 10,
+    subscribe_like: s.coins_subscribe_like ?? 17,
+    watch:          s.coins_watch          ?? 4,
+  };
+  const slotCosts = {
+    subscribe:      rewardPerType.subscribe      + margin,
+    like:           rewardPerType.like           + margin,
+    like_comment:   rewardPerType.like_comment   + margin + (s.comment_bonus ?? 4),
+    subscribe_like: rewardPerType.subscribe_like + margin,
+    watch:          rewardPerType.watch          + margin,
+  };
+  // Watch extra-minute units are ALWAYS base: the mobile watch adjustment is a flat
+  // per-slot offset already baked into slot_costs.watch / reward_per_type.watch below,
+  // so a client composing base + extras×(these units) lands EXACTLY on what the server
+  // charges (createTask) and pays (verify) at every duration.
+  const watchExtraCost = WATCH_COST_PER_EXTRA_MIN;
+  const watchExtraReward = WATCH_REWARD_PER_EXTRA_MIN;
+
+  // Mobile pricing nudge: show the SAME surcharged cost / reduced reward the server will
+  // actually charge and pay (see taskController createTask + verify), so the app never
+  // displays a different number than it enforces. Web sees the base values.
+  if (isMobileRequest(req)) {
+    for (const k of Object.keys(slotCosts))     slotCosts[k]     = mobileCampaignCost(slotCosts[k], k);
+    for (const k of Object.keys(rewardPerType)) rewardPerType[k] = mobileEarnPayout(rewardPerType[k], k);
+  }
+
   res.json({
     min_usd: MIN_PURCHASE_USD,
     rate: 200,
-    slot_costs: {
-      subscribe:      (s.coins_subscribe      ?? 12) + (s.house_margin ?? 3),
-      like:           (s.coins_like           ?? 6)  + (s.house_margin ?? 3),
-      like_comment:   (s.coins_like_comment   ?? 10) + (s.house_margin ?? 3) + (s.comment_bonus ?? 4),
-      subscribe_like: (s.coins_subscribe_like ?? 17) + (s.house_margin ?? 3),
-      watch:          (s.coins_watch          ?? 4)  + (s.house_margin ?? 3),
-    },
-    reward_per_type: {
-      subscribe:      s.coins_subscribe      ?? 12,
-      like:           s.coins_like           ?? 6,
-      like_comment:   s.coins_like_comment   ?? 10,
-      subscribe_like: s.coins_subscribe_like ?? 17,
-      watch:          s.coins_watch          ?? 4,
-    },
-    house_margin: s.house_margin ?? 3,
-    watch_extra_min_cost: WATCH_COST_PER_EXTRA_MIN,
-    watch_extra_min_reward: WATCH_REWARD_PER_EXTRA_MIN,
+    slot_costs: slotCosts,
+    reward_per_type: rewardPerType,
+    house_margin: margin,
+    watch_extra_min_cost: watchExtraCost,
+    watch_extra_min_reward: watchExtraReward,
     // Google Play coin packs: { productId: coins }. The app queries Play for the
     // localized price of each id and shows the coin amount from here.
     google_products: cfg.GOOGLE_PLAY_PRODUCTS,

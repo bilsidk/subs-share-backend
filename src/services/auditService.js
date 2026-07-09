@@ -38,6 +38,15 @@ async function clawbackCommentBonus(c) {
     if (upd.rows.length) {
       await dbc.query('UPDATE users SET coins=GREATEST(0,coins-$1) WHERE id=$2', [c.bonus_coins, c.user_id]);
       await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'spent','tx:comment_bonus_reclaimed')`, [c.user_id, c.bonus_coins]);
+      // Return the owner-funded bonus to the campaign owner — they paid for a comment that
+      // no longer exists, so the coins go back to them rather than vanishing to the house.
+      if (c.task_id) {
+        const own = await dbc.query(`SELECT ch.user_id AS owner_id FROM tasks t JOIN channels ch ON ch.id=t.channel_id WHERE t.id=$1`, [c.task_id]);
+        if (own.rows.length && own.rows[0].owner_id) {
+          await dbc.query('UPDATE users SET coins=coins+$1 WHERE id=$2', [c.bonus_coins, own.rows[0].owner_id]);
+          await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'earned','tx:comment_bonus_refunded_owner')`, [own.rows[0].owner_id, c.bonus_coins]);
+        }
+      }
     }
     await dbc.query('COMMIT');
   } catch (e) { await dbc.query('ROLLBACK'); console.error('[AUDIT] comment bonus clawback failed', c.id, e.message); }
@@ -80,12 +89,27 @@ async function reclaim(c) {
     // return the slot to their campaign (and re-open it if it had filled up) so a
     // real earner can replace it. Cancelled campaigns are left cancelled.
     if (c.task_id) {
-      await dbc.query(
-        `UPDATE tasks SET remaining_slots = remaining_slots + 1,
-                status = CASE WHEN status = 'completed' THEN 'active' ELSE status END
-         WHERE id = $1 AND status <> 'cancelled'`,
+      const tk = await dbc.query(
+        `SELECT t.status, t.slot_cost, ch.user_id AS owner_id
+         FROM tasks t JOIN channels ch ON ch.id=t.channel_id WHERE t.id=$1 FOR UPDATE OF t`,
         [c.task_id]
       );
+      if (tk.rows.length && tk.rows[0].status === 'cancelled') {
+        // No slot to restore on a cancelled campaign — make the owner whole instead by
+        // refunding what they paid for this now-undone engagement.
+        const cost = Number(tk.rows[0].slot_cost) || 0;
+        if (cost > 0 && tk.rows[0].owner_id) {
+          await dbc.query('UPDATE users SET coins=coins+$1 WHERE id=$2', [cost, tk.rows[0].owner_id]);
+          await dbc.query(`INSERT INTO transactions (user_id,amount,type,description) VALUES ($1,$2,'earned','tx:slot_refunded_owner_reclaim')`, [tk.rows[0].owner_id, cost]);
+        }
+      } else if (tk.rows.length) {
+        await dbc.query(
+          `UPDATE tasks SET remaining_slots = remaining_slots + 1,
+                  status = CASE WHEN status = 'completed' THEN 'active' ELSE status END
+           WHERE id = $1`,
+          [c.task_id]
+        );
+      }
     }
     await dbc.query('COMMIT');
     claimed = true;
