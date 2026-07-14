@@ -37,6 +37,15 @@ function startAuditScheduler() {
     try { await runAudit(); } catch (e) { console.error('[AUDIT] Scheduler error:', e.message); }
   });
 
+  // Reconcile crypto purchases whose crediting IPN was never delivered (endpoint down /
+  // IPN secret misconfigured) — ask NOWPayments for the true status and credit the buyer
+  // exactly-once via the same path the IPN uses. Every 20 min. No-ops if NOWPayments
+  // isn't configured. (Lazy require mirrors the voided-purchase reconcile below.)
+  cron.schedule('*/20 * * * *', async () => {
+    try { await require('../controllers/paymentController').reconcilePendingCryptoPayments(); }
+    catch (e) { console.error('[RECONCILE] pending-crypto reconcile failed:', e.message); }
+  });
+
   // Refresh subscriber counts daily at 3am UTC + reap abandoned task_starts
   cron.schedule('0 3 * * *', async () => {
     await refreshSubscriberCounts();
@@ -50,7 +59,7 @@ function startAuditScheduler() {
     catch (e) { console.error('[CLEANUP] voided-purchase reconcile failed:', e.message); }
   });
 
-  console.log('🕒 Audit scheduler started (every 15 min) + subscriber refresh (daily 3am UTC)');
+  console.log('🕒 Audit scheduler started (every 15 min) + crypto reconcile (every 20 min) + subscriber refresh (daily 3am UTC)');
 }
 
 module.exports = { startAuditScheduler, refreshSubscriberCounts };

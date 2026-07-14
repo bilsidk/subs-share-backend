@@ -5,7 +5,7 @@ const antiCheat      = require('../services/antiCheatService');
 const integrity      = require('../services/integrityService');
 const gemini         = require('../services/geminiService');
 const cfg            = require('../config');
-const { watchPricing, earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum } = require('../lib/economy');
+const { earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum } = require('../lib/economy');
 const { isMobileRequest, mobileCampaignCost, mobileEarnPayout } = require('../lib/platform');
 
 // GET /tasks/integrity-nonce — issues a short-lived nonce for the Play Integrity
@@ -20,12 +20,23 @@ const getIntegrityNonce = async (req, res) => {
 const getClientConfig = async (req, res, next) => {
   try {
     const s = await settings.getSettings();
+    const lang = typeof req.query.lang === 'string' ? req.query.lang : 'en';
+    const rawMaint = typeof s.maintenance_message === 'string' ? s.maintenance_message : '';
+    const rawAnn   = typeof s.announcement_message === 'string' ? s.announcement_message : '';
+    // Auto-translate the admin broadcasts into the user's language. This is SYNCHRONOUS and
+    // NON-BLOCKING: returns the cached translation or the original text instantly and
+    // translates in the background — Gemini being slow/down/blocked can never delay config.
+    const maintenance_message = gemini.translateMessage(rawMaint, lang);
+    const announcement_message = gemini.translateMessage(rawAnn, lang);
     res.json({
       disabled_task_types: Array.isArray(s.disabled_task_types) ? s.disabled_task_types : [],
       // Same per-key default merge as verify, so clients display the caps actually enforced.
       daily_cap_by_type: { ...settings.DEFAULTS.daily_cap_by_type,
         ...((s.daily_cap_by_type && typeof s.daily_cap_by_type === 'object') ? s.daily_cap_by_type : {}) },
-      maintenance_message: typeof s.maintenance_message === 'string' ? s.maintenance_message : '',
+      maintenance_message,
+      announcement_message,
+      announcement_link: typeof s.announcement_link === 'string' ? s.announcement_link : '',
+      announcement_platform: ['both','web','mobile'].includes(s.announcement_platform) ? s.announcement_platform : 'both',
     });
   } catch (err) { next(err); }
 };
@@ -64,8 +75,39 @@ function isTrustedWebRequest(req) {
   return WEB_ORIGINS.some(o => origin === o || referer === o || referer.startsWith(o + '/'));
 }
 
-// watchPricing / earnedKeysFor / sanitizeExampleIds / commentMeetsMinimum now live in
-// src/lib/economy.js (pure + unit-tested) and are imported at the top of this file.
+// earnedKeysFor / sanitizeExampleIds / commentMeetsMinimum are pure, unit-tested helpers in
+// src/lib/economy.js. The compose-from-atoms pricing (cfg.rewardFor / cfg.slotCostFor + the
+// watch tiers) is the single source of truth in src/config and is used via `cfg` below.
+
+// Task types the user has hit their daily cap on TODAY (rolling 24h — matches verify's
+// enforcement window). Uses the SAME cap sources verify enforces: per-type daily_cap_by_type
+// with DEFAULTS merged per-key, DAILY_CAP_GROUP shared buckets (like + like_comment count
+// together), and the watch-specific max_watch_per_day. Returned types are hidden from the feed.
+async function cappedTaskTypesForUser(userId, appSettings) {
+  const capMap = { ...settings.DEFAULTS.daily_cap_by_type,
+    ...((appSettings.daily_cap_by_type && typeof appSettings.daily_cap_by_type === 'object') ? appSettings.daily_cap_by_type : {}) };
+  const watchCap = parseInt(appSettings.max_watch_per_day, 10) || cfg.MAX_WATCH_PER_DAY;
+  // No cap configured for any type → skip the DB round-trip entirely.
+  const anyCap = watchCap > 0 || cfg.TASK_TYPES.some((t) => t !== 'watch' && parseInt(capMap[t], 10) > 0);
+  if (!anyCap) return [];
+  const cRes = await pool.query(
+    `SELECT task_type, COUNT(*)::int AS n FROM completions
+     WHERE user_id=$1 AND completed_at > NOW() - INTERVAL '24 hours' GROUP BY task_type`,
+    [userId]
+  );
+  const used = {};
+  for (const r of cRes.rows) used[r.task_type] = r.n;
+  const capped = [];
+  for (const tt of cfg.TASK_TYPES) {
+    let cap, group;
+    if (tt === 'watch') { cap = watchCap; group = ['watch']; }
+    else { cap = parseInt(capMap[tt], 10); group = cfg.DAILY_CAP_GROUP[tt] || [tt]; }
+    if (!(cap > 0)) continue;
+    const total = group.reduce((s, g) => s + (used[g] || 0), 0);
+    if (total >= cap) capped.push(tt);
+  }
+  return capped;
+}
 
 // GET /tasks
 const getAvailableTasks = async (req, res, next) => {
@@ -75,11 +117,16 @@ const getAvailableTasks = async (req, res, next) => {
     let typeFilter = '';
     if (type) { params.push(type); typeFilter = `AND t.task_type=$${params.length}`; }
 
-    // Admin kill switch: hide disabled task types from the feed (default-safe: empty = all shown).
+    // Admin kill switch: hide disabled task types (default-safe: empty = all shown). PLUS
+    // hide task types this user has already hit their daily cap on today — the feed only
+    // shows what they can still complete (no "try a different one"; once all but watch are
+    // capped, only watch shows; if watch is capped too, the feed is empty).
     const feedSettings = await settings.getSettings();
     const disabledTypes = Array.isArray(feedSettings.disabled_task_types) ? feedSettings.disabled_task_types : [];
-    let disabledFilter = '';
-    if (disabledTypes.length) { params.push(disabledTypes); disabledFilter = `AND NOT (t.task_type = ANY($${params.length}))`; }
+    const cappedTypes = await cappedTaskTypesForUser(req.userId, feedSettings);
+    const hiddenTypes = Array.from(new Set([...disabledTypes, ...cappedTypes]));
+    let hiddenFilter = '';
+    if (hiddenTypes.length) { params.push(hiddenTypes); hiddenFilter = `AND NOT (t.task_type = ANY($${params.length}))`; }
 
     const r = await pool.query(
       // NOTE: remaining_slots / total_slots / progress are deliberately NOT selected —
@@ -107,7 +154,7 @@ const getAvailableTasks = async (req, res, next) => {
                WHEN 'watch'          THEN ARRAY['watch:'||COALESCE(t.target_video_id,'')]
                ELSE ARRAY[]::text[]
              END)
-         ) ${typeFilter} ${disabledFilter}
+         ) ${typeFilter} ${hiddenFilter}
        -- Feed ranking: premium block above regular (tier), then inside each block the
        -- LEAST-completed campaign (by fill RATIO, fair to all sizes) first, and on equal
        -- ratios the OLDEST campaign first — so no campaign is starved by newer arrivals.
@@ -129,7 +176,11 @@ const getAvailableTasks = async (req, res, next) => {
 
 // POST /tasks
 const createTask = async (req, res, next) => {
-  const client = await pool.connect();
+  // Match verifyTask's safe DB pattern: run ALL pre-transaction reads (getSettings,
+  // getVideoDuration, validation) on the SHARED pool, and acquire a dedicated pooled
+  // client ONLY just before BEGIN — never hold a connection idle across the (possibly
+  // slow) YouTube API call, which under load could starve the pool (max=10).
+  let client = null;
   try {
     const { channel_id, task_type='subscribe', subscribers_wanted, target_video_url, watch_minutes } = req.body;
     const slots = parseInt(subscribers_wanted, 10);
@@ -142,36 +193,38 @@ const createTask = async (req, res, next) => {
       return res.status(400).json({ error: 'Slot count required' });
     if (slots > 100000)
       return res.status(400).json({ error: 'Slot count too large (max 100000 per campaign).' });
-    if (!cfg.REWARDS[task_type])
+    if (!cfg.TASK_TYPES.includes(task_type))
       return res.status(400).json({ error: 'Invalid task_type' });
 
     const appSettings = await settings.getSettings();
     // Admin kill switch: block creating a temporarily-disabled campaign type.
     if ((Array.isArray(appSettings.disabled_task_types) ? appSettings.disabled_task_types : []).includes(task_type))
       return res.status(403).json({ error: 'This campaign type is temporarily disabled. Please try another type.', code: 'TASK_TYPE_DISABLED' });
-    const margin = appSettings.house_margin ?? 3;
-    const rewardMap = {
-      subscribe:       appSettings.coins_subscribe,
-      like:            appSettings.coins_like,
-      like_comment:    appSettings.coins_like_comment,
-      subscribe_like:  appSettings.coins_subscribe_like,
-      watch:           appSettings.coins_watch,
+
+    // LIVE atoms + margin (admin-overridable in app_settings). Every combo reward and every
+    // slot cost DERIVES from these via cfg.rewardFor / cfg.slotCostFor — no independent combo
+    // values exist, so the price the owner is charged and the payout the earner can receive
+    // can never drift apart. A bad/absent setting falls back to the built-in atom.
+    const atoms = {
+      subscribe:     Number.isFinite(+appSettings.coins_subscribe) ? +appSettings.coins_subscribe : cfg.ATOMS.subscribe,
+      like:          Number.isFinite(+appSettings.coins_like)      ? +appSettings.coins_like      : cfg.ATOMS.like,
+      watch_base:    Number.isFinite(+appSettings.coins_watch)     ? +appSettings.coins_watch     : cfg.ATOMS.watch_base,
+      comment_bonus: Number.isFinite(+appSettings.comment_bonus)   ? +appSettings.comment_bonus   : cfg.ATOMS.comment_bonus,
     };
+    const marginPct = Number.isFinite(+appSettings.margin_pct) ? Math.max(0, +appSettings.margin_pct) : cfg.MARGIN_PCT;
 
     let target_video_id = null;
     let video_duration_sec = null;
-    let taskReward = rewardMap[task_type] ?? cfg.REWARDS[task_type];
-    let slotCost = taskReward + margin;
-    // like_comment can pay a comment bonus ON TOP of the reward when the comment is
-    // verified. The owner must fund that too, otherwise each verified comment pays out
-    // more than the slot cost (10 reward + 4 bonus = 14 vs a 13 charge) — minting coins.
-    // Lock the funded bonus onto the task (stored below) so a later admin change to the
-    // comment_bonus setting can't make the earner payout exceed what the owner funded.
-    let commentBonusFunded = 0;
-    if (task_type === 'like_comment') {
-      commentBonusFunded = appSettings.comment_bonus ?? cfg.COMMENT_BONUS;
-      slotCost += commentBonusFunded;
-    }
+    // Stored earner reward = the ALWAYS-paid base. For like_comment that's the LIKE atom;
+    // the comment bonus is funded + paid separately (only when the comment verifies), so it
+    // must NOT be baked into tasks.reward or a verified comment would double-pay the bonus.
+    let taskReward = (task_type === 'like_comment') ? atoms.like : cfg.rewardFor(task_type, 1, atoms);
+    // Owner cost covers the MAX payout (for like_comment that's like + comment bonus), so a
+    // verified comment can never pay out more than the owner funded. slotCostFor derives this.
+    let slotCost = cfg.slotCostFor(task_type, 1, atoms, marginPct);
+    // Lock the funded comment bonus onto the task (stored below) so a later admin change to
+    // the comment_bonus setting can't make the earner payout exceed what the owner funded.
+    let commentBonusFunded = task_type === 'like_comment' ? atoms.comment_bonus : 0;
     // Persisted watch length: only meaningful for watch tasks (set from the validated
     // `mins` below). Defaults to MIN for every other type so a junk req.body.watch_minutes
     // can never reach the INSERT (it would raise a type error → 500).
@@ -189,20 +242,32 @@ const createTask = async (req, res, next) => {
         return res.status(400).json({ error: 'Video not found or is private' });
 
       if (task_type === 'watch') {
-        const mins = parseInt(watch_minutes, 10) || cfg.MIN_WATCH_MINUTES;
+        // "Full length" checkbox: price from the video's OWN duration, rounded UP to a whole
+        // minute (6:01 → 7), capped at FULL_LENGTH_WATCH_CAP_MINUTES so a long video still
+        // fills. Otherwise use the owner-supplied watch_minutes.
+        const fullLength = req.body.full_length === true || req.body.full_length === 'true' || req.body.full_length === 1;
+        let mins;
+        if (fullLength) {
+          mins = Math.min(cfg.FULL_LENGTH_WATCH_CAP_MINUTES,
+                          Math.max(cfg.MIN_WATCH_MINUTES, Math.ceil(videoInfo.durationSec / 60)));
+        } else {
+          mins = parseInt(watch_minutes, 10) || cfg.MIN_WATCH_MINUTES;
+        }
         if (mins < cfg.MIN_WATCH_MINUTES || mins > cfg.MAX_WATCH_MINUTES)
           return res.status(400).json({ error: `watch_minutes must be ${cfg.MIN_WATCH_MINUTES}–${cfg.MAX_WATCH_MINUTES}` });
-        storedWatchMinutes = mins;
-        const requiredSec = mins * 60;
-        if (videoInfo.durationSec < requiredSec)
+        // An explicit duration requires the video to be at least that long. Full-length rounds
+        // the video's own length UP, so it may exceed the real length by <1 min — the verify
+        // time-floor caps the required watch at the real video length, so it stays achievable.
+        if (!fullLength && videoInfo.durationSec < mins * 60)
           return res.status(400).json({
             error: `Video "${videoInfo.title}" is ${Math.floor(videoInfo.durationSec/60)}m ${videoInfo.durationSec%60}s — shorter than your required ${mins} minute(s).`,
             video_duration_sec: videoInfo.durationSec,
           });
+        storedWatchMinutes = mins;
         video_duration_sec = videoInfo.durationSec;
-        const pricing = watchPricing(mins, rewardMap.watch ?? cfg.REWARDS.watch, margin);
-        taskReward = pricing.reward;
-        slotCost = pricing.slotCost;
+        // Tiered watch reward + its margin cost, composed from the SAME live atoms.
+        taskReward = cfg.rewardFor('watch', mins, atoms);
+        slotCost   = cfg.slotCostFor('watch', mins, atoms, marginPct);
       }
     }
 
@@ -216,6 +281,7 @@ const createTask = async (req, res, next) => {
     const totalCost = isOwner ? 0 : slots * slotCost;
     const ownerTier = tierFor(isOwner ? 'owner' : me.role);
 
+    client = await pool.connect();
     await client.query('BEGIN');
 
     if (requiresChannel) {
@@ -303,8 +369,14 @@ const createTask = async (req, res, next) => {
 
     await client.query('COMMIT');
     res.status(201).json({ task: taskRes.rows[0], coins_spent: totalCost, slot_cost: slotCost, earner_reward: taskReward, owner: isOwner });
-  } catch (err) { await client.query('ROLLBACK'); next(err); }
-  finally { client.release(); }
+  } catch (err) {
+    // Guard the rollback: if the connection died mid-transaction an unguarded
+    // await here would become an unhandled rejection (process crash). client may
+    // also be null if we threw before acquiring it (pre-transaction reads).
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
+    next(err);
+  }
+  finally { if (client) client.release(); }
 };
 
 // POST /tasks/:id/verify
@@ -544,7 +616,7 @@ const verifyTask = async (req, res, next) => {
                      : e.response?.status || 'other';
         if (status === 'noaccess') return res.status(403).json({ error: 'YouTube access required. Sign out and sign in again.', code: 'NO_YOUTUBE_ACCESS' });
         if (status === 401) { await settings.recordApiFailure('401'); return res.status(401).json({ error: 'YouTube session expired. Sign in again.', code: 'YOUTUBE_REAUTH' }); }
-        await settings.recordApiFailure(String(status));
+        settings.recordApiFailure(String(status)).catch(() => {});
         const after = await settings.getMode();
         if (after.mode === 'degraded') { verifyMethod = 'honor'; }
         else return res.status(502).json({ error: 'Could not verify right now. Try again shortly.', code: 'VERIFY_RETRY' });
@@ -552,11 +624,24 @@ const verifyTask = async (req, res, next) => {
     }
 
     // Mobile earn penalty (steer earners to the web version). Web pays full; mobile pays
-    // less and the house keeps the difference. Payout is always <= slot_cost, so no mint.
+    // less and the house keeps the difference.
     const mobileEarn = isMobileRequest(req);
-    const payoutReward = mobileEarn ? mobileEarnPayout(task.reward, task.task_type) : task.reward;
-    const payoutBonus  = mobileEarn ? mobileEarnPayout(bonusCoins,  task.task_type) : bonusCoins;
-    const totalCoins = payoutReward + payoutBonus;
+    let payoutReward = mobileEarn ? mobileEarnPayout(task.reward, task.task_type) : task.reward;
+    let payoutBonus  = mobileEarn ? mobileEarnPayout(bonusCoins,  task.task_type) : bonusCoins;
+    let totalCoins = payoutReward + payoutBonus;
+
+    // NO-MINT INVARIANT (crown jewel): the earner payout can NEVER exceed the slot_cost the
+    // owner LOCKED at creation. By construction it always holds — slot_cost = ceil(reward *
+    // (1 + margin)) >= reward >= any mobile-reduced payout, and mobile surcharges only raise
+    // the locked cost. This clamp is a defense-in-depth backstop: if a future pricing bug or a
+    // corrupt row ever inverts it, we pay AT MOST what the owner funded (never mint) and alert.
+    const lockedCost = Number(task.slot_cost);
+    if (Number.isFinite(lockedCost) && lockedCost >= 0 && totalCoins > lockedCost) {
+      console.error(`[MINT-GUARD] verify payout ${totalCoins} > locked slot_cost ${lockedCost} (task=${taskId}, type=${task.task_type}, user=${req.userId}) — clamping to slot_cost`);
+      totalCoins = lockedCost;
+      if (payoutBonus > totalCoins) payoutBonus = totalCoins;
+      payoutReward = totalCoins - payoutBonus;
+    }
 
     dbc = await pool.connect();
     await dbc.query('BEGIN');
@@ -781,14 +866,19 @@ const getCommentHelp = async (req, res, next) => {
     const cached = await pool.query('SELECT text FROM comment_ai_examples WHERE task_id=$1 AND lang=$2', [taskId, lang]);
     if (cached.rows.length) { out.ai_example = cached.rows[0].text; return res.json(out); }
 
+    // AI example generation must NEVER block this response (Gemini is bounded only by
+    // its own ~6s). Like translateMessage: return the curated per-locale fallback
+    // (template_ids, ai_example:null) immediately and generate the fresh example in the
+    // BACKGROUND so it's cached for the next request — the endpoint can't hang on Gemini.
     if (gemini.available() && task.target_video_id) {
-      let title = '';
-      try { const vi = await youtubeService.getVideoDuration(task.target_video_id); title = vi?.title || ''; } catch (_) {}
-      const ex = await gemini.generateExampleComment(title, lang);
-      if (ex) {
-        out.ai_example = ex;
-        pool.query('INSERT INTO comment_ai_examples (task_id, lang, text) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [taskId, lang, ex]).catch(() => {});
-      }
+      (async () => {
+        let title = '';
+        try { const vi = await youtubeService.getVideoDuration(task.target_video_id); title = vi?.title || ''; } catch (_) {}
+        const ex = await gemini.generateExampleComment(title, lang);
+        if (ex) {
+          pool.query('INSERT INTO comment_ai_examples (task_id, lang, text) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [taskId, lang, ex]).catch(() => {});
+        }
+      })().catch(() => {});
     }
     res.json(out);
   } catch (err) { next(err); }

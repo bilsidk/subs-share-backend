@@ -1,28 +1,103 @@
+// ── Compose-from-atoms economy (spec: "Economy & Watch Redesign 2026-07-11") ────────
+// Only 4 ATOMIC earn values exist (web/base). Every combo reward and every owner slot
+// cost DERIVES from them, so the two can never drift or be configured inconsistently.
+// Admin overrides live in app_settings (coins_subscribe / coins_like / coins_watch /
+// comment_bonus / margin_pct); the derived combos + watch tiers ALWAYS recompute from
+// whatever atoms are live (see rewardFor / slotCostFor + taskController).
+const ATOMS = { subscribe: 12, like: 5, watch_base: 2, comment_bonus: 8 };
+const MARGIN_PCT = 0.25;   // owner slot_cost = ceil(earner_reward * (1 + MARGIN_PCT))
+
+// Watch reward is TIERED to reward genuine long watches — farm-safe only because of the
+// in-video "Still watching?" presence probe. Minute 1 = watch_base; each further minute
+// adds per its tier. Increments are FIXED (not admin-settable); only the minute-1 base
+// (the watch_base atom) is overridable. e.g. 10 min → 11, 20 min → 31, 30 min → 61.
+const WATCH_TIERS = [
+  { upToMin: 10,       perMin: 1 },   // minutes 2–10:  +1/min
+  { upToMin: 20,       perMin: 2 },   // minutes 11–20: +2/min
+  { upToMin: Infinity, perMin: 3 },   // minutes 21+:   +3/min
+];
+function watchRewardFor(minutes, watchBase) {
+  const base = Number.isFinite(+watchBase) ? +watchBase : ATOMS.watch_base;
+  const m = Math.max(1, Math.floor(Number(minutes)) || 1);
+  let total = base;                                 // minute 1
+  for (let min = 2; min <= m; min++) {
+    const tier = WATCH_TIERS.find((t) => min <= t.upToMin);
+    total += tier ? tier.perMin : 0;
+  }
+  return total;
+}
+
+// Earner reward (web/base) for a task type. Combos derive; watch is tiered by minutes.
+// `atoms` lets callers pass the LIVE admin-overridden atoms (createTask does); it defaults
+// to the built-in ATOMS. NOTE: for like_comment this returns the FULL value (like + comment
+// bonus) so slotCostFor funds the MAX payout — the controller stores the LIKE base in
+// tasks.reward and funds the comment bonus separately (paid only when the comment verifies).
+function rewardFor(taskType, watchMinutes = 1, atoms = ATOMS) {
+  const A = { ...ATOMS, ...(atoms || {}) };
+  switch (taskType) {
+    case 'subscribe':      return A.subscribe;
+    case 'like':           return A.like;
+    case 'like_comment':   return A.like + A.comment_bonus;
+    case 'subscribe_like': return A.subscribe + A.like;
+    case 'watch':          return watchRewardFor(watchMinutes, A.watch_base);
+    default:               return 0;
+  }
+}
+
+// Owner slot cost = ceil(earner reward × (1 + margin)). Margin is clamped ≥ 0 so the cost
+// is ALWAYS ≥ the reward — the earner payout can never exceed what the owner funded, on
+// any task type or watch duration. This is the no-coin-minting invariant at the source.
+function slotCostFor(taskType, watchMinutes = 1, atoms = ATOMS, marginPct = MARGIN_PCT) {
+  const m = Number.isFinite(+marginPct) ? Math.max(0, +marginPct) : MARGIN_PCT;
+  return Math.ceil(rewardFor(taskType, watchMinutes, atoms) * (1 + m));
+}
+
+const TASK_TYPES = ['subscribe', 'like', 'like_comment', 'subscribe_like', 'watch'];
+
+// Legacy flat views — DERIVED from the atoms above (single source of truth). Kept ONLY so
+// existing readers keep resolving a value: the createTask validity check, campaignController's
+// legacy-row (pre-slot_cost) refund fallback, and paymentController's tier display. New
+// pricing goes exclusively through rewardFor / slotCostFor. `like_comment` reward here is the
+// LIKE base (the comment bonus is funded + paid separately), matching what tasks.reward stores.
+const REWARDS = {
+  subscribe:      ATOMS.subscribe,
+  like:           ATOMS.like,
+  like_comment:   ATOMS.like,                    // base only; bonus funded separately
+  subscribe_like: ATOMS.subscribe + ATOMS.like,
+  watch:          ATOMS.watch_base,              // 1-min base
+};
+const SLOT_COSTS = {
+  subscribe:      slotCostFor('subscribe'),
+  like:           slotCostFor('like'),
+  like_comment:   slotCostFor('like_comment'),
+  subscribe_like: slotCostFor('subscribe_like'),
+  watch:          slotCostFor('watch', 1),
+};
+
 module.exports = {
   OWNER_EMAIL: (process.env.OWNER_EMAIL || 'bilsidk@gmail.com').toLowerCase(),
 
-  // What earners receive per task type
-  REWARDS: {
-    subscribe:       12,
-    like:            6,
-    like_comment:    10,
-    subscribe_like:  17,
-    watch:           4,   // base for 1 min; +1 per extra minute
-  },
+  // Compose-from-atoms economy (see block above). ATOMS + MARGIN_PCT are the source of
+  // truth; rewardFor/slotCostFor compose everything else. REWARDS/SLOT_COSTS are derived
+  // legacy views for backward-compat only.
+  ATOMS,
+  MARGIN_PCT,
+  WATCH_TIERS,
+  watchRewardFor,
+  rewardFor,
+  slotCostFor,
+  TASK_TYPES,
+  REWARDS,
+  SLOT_COSTS,
 
-  // What campaign owners pay per slot (earner reward + 3 coin house margin)
-  SLOT_COSTS: {
-    subscribe:       15,
-    like:            9,
-    like_comment:    17,   // reward 10 + margin 3 + comment bonus 4 (owner funds the bonus)
-    subscribe_like:  20,
-    watch:           7,   // base for 1 min; +1 per extra minute
-  },
-
-  WATCH_COST_PER_EXTRA_MIN: 1,   // added to both owner cost and earner reward
+  // First watch tier increment, exposed for legacy per-extra-minute display math. The new
+  // reward is TIERED (see WATCH_TIERS) — these describe the FIRST tier (minutes 2–10) only.
+  WATCH_COST_PER_EXTRA_MIN: 1,
   WATCH_REWARD_PER_EXTRA_MIN: 1,
 
-  COMMENT_BONUS: 4,
+  // Current default comment bonus = the comment_bonus atom. Only a fallback for rows whose
+  // funded per-task comment_bonus is somehow absent (legacy rows are backfilled by migrate.js).
+  COMMENT_BONUS: ATOMS.comment_bonus,
 
   // Platform economy nudge — steer users to the lower-fee WEB version. Web = base (these
   // values, unchanged). MOBILE pays a bit more per campaign slot and earns a bit less per
@@ -32,8 +107,8 @@ module.exports = {
   MOBILE_SURCHARGE_BY_TYPE: { subscribe: 0.20, like: 0.20, like_comment: 0.20, subscribe_like: 0.20, watch: 0 },
   MOBILE_PENALTY_BY_TYPE:   { subscribe: 0.15, like: 0.15, like_comment: 0.15, subscribe_like: 0.15, watch: 0 },
   // Watch uses FLAT per-slot offsets instead of percentages: its price composes per
-  // minute (base + 1/extra min), and a percentage of the composed total can't be shown
-  // exactly by a client that composes per-part — flat offsets keep shown = charged =
+  // minute (base + tiered increments), and a percentage of the composed total can't be
+  // shown exactly by a client that composes per-part — flat offsets keep shown = charged =
   // paid EXACT at every duration on every client. Web better both ways at all durations.
   MOBILE_WATCH_COST_FLAT: 1,   // mobile watch slot costs +1 coin at any duration
   MOBILE_WATCH_EARN_FLAT: 1,   // mobile watch payout is −1 coin at any duration
@@ -50,6 +125,11 @@ module.exports = {
 
   MIN_WATCH_MINUTES: 1,
   MAX_WATCH_MINUTES: 60,
+  // "Full length" watch campaigns auto-price from the video's own duration (rounded UP to a
+  // whole minute), but are CAPPED here so a very long video still fills (earners watch this
+  // many minutes, not the whole thing). The verify time-floor caps the required watch at the
+  // real video length, so a full-length campaign is always achievable.
+  FULL_LENGTH_WATCH_CAP_MINUTES: 15,
 
   COMPLETION_DELAY_SECONDS: 45,
 

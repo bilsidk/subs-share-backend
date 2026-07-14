@@ -3,17 +3,32 @@
 
 const GOOGLE_CLIENT_ID = '59298470844-ldipur31o2rbe3la0oecsin3jd65pklq.apps.googleusercontent.com';
 // Same-origin when served by the backend itself; absolute URL when hosted elsewhere (e.g. Namecheap)
-const API_BASE = location.hostname.endsWith('.railway.app') || location.hostname === 'localhost'
-  ? '' : 'https://subs-share-backend-production.up.railway.app';
+const API_BASE = location.hostname === 'localhost'
+  ? '' : 'https://viralboostnow.com/api';
 const YT_SCOPE = 'openid email profile https://www.googleapis.com/auth/youtube.readonly';
 const COMPLETION_DELAY = 45; // server enforces the real value; this drives the UI countdown
 
 // Mirrors backend src/config — display estimates only, server is authoritative. These
 // objects are REPLACED IN PLACE from GET /payments/tiers on load (see init) so an admin
 // re-price is reflected on web too; the static values here are just the offline fallback.
-const SLOT_COSTS = { subscribe: 15, like: 9, like_comment: 17, subscribe_like: 20, watch: 7 };
-const REWARDS    = { subscribe: 12, like: 6,  like_comment: 10, subscribe_like: 17, watch: 4 };
-const WATCH_EXTRA = { cost: 1 }; // per extra-minute owner cost (from tiers.watch_extra_min_cost)
+// Economy & Watch Redesign 2026-07-11: compose-from-atoms (subscribe 12, like 5, comment
+// bonus 8, watch base 2 + tiered) with a 25% margin. Combos derive: subscribe_like =
+// 12+5=17, like_comment = 5+8=13. Watch is priced via the tiered curve below, not this table.
+const SLOT_COSTS = { subscribe: 15, like: 6, like_comment: 16, subscribe_like: 21 };
+const REWARDS    = { subscribe: 12, like: 5,  like_comment: 13, subscribe_like: 17 };
+const MARGIN_MULT = 1.25; // display estimate mirrors the 25% house margin — server authoritative
+const FULL_LENGTH_CAP_MIN = 15; // "Full length" watch campaigns cap at this many required minutes
+
+// Tiered watch REWARD (earner payout) — escalates per minute to reward genuine long
+// watches: min 1 = 2, min 2–10 = +1/min, min 11–20 = +2/min, min 21+ = +3/min
+// (10 min -> 11, 20 min -> 31, 30 min -> 61). Display estimate — server is authoritative.
+function tieredWatchReward(mins) {
+  const n = Math.max(1, Math.min(60, parseInt(mins, 10) || 1));
+  let total = 0;
+  for (let m = 1; m <= n; m++) total += m === 1 ? 2 : m <= 10 ? 1 : m <= 20 ? 2 : 3;
+  return total;
+}
+function tieredWatchCost(mins) { return Math.ceil(tieredWatchReward(mins) * MARGIN_MULT); }
 
 const TASK_TYPES = ['subscribe', 'like', 'like_comment', 'subscribe_like', 'watch'];
 const TASK_ICON = { subscribe: '🔔', like: '👍', like_comment: '💬', subscribe_like: '⭐', watch: '▶️' };
@@ -37,6 +52,7 @@ const S = {
   modal: null, // {task, status:'idle'|'countdown'|'ready'|'verifying'|'done', countdown, startedAt, error, message}
   busy: false, loginError: '', payNotice: '',
   referralCode: '', referral: null,
+  openingTaskId: null, // id of the task card currently running its pre-flight /start check — drives the card spinner and blocks a double-tap
 };
 let countdownTimer = null;
 
@@ -54,15 +70,27 @@ function deviceId() {
 }
 
 // ── api ───────────────────────────────────────────────────────────────────────
+const REQUEST_TIMEOUT = 15000; // ms — mirrors mobile src/services/api.js; without this a bare fetch() can hang forever on a slow (not down) backend
 async function req(method, path, body) {
   const headers = { 'Content-Type': 'application/json' };
   if (S.token) headers.Authorization = 'Bearer ' + S.token;
-  const res = await fetch(API_BASE + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
-  const text = await res.text();
-  let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || 'Unexpected response' }; }
-  if (res.status === 401 && S.token) { signOut(); throw new Error(tr('common.sessionExpired')); }
-  if (!res.ok) { const e = new Error(data.error || tr('common.requestFailed')); e.code = data.code; e.data = data; e.status = res.status; throw e; }
-  return data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  try {
+    const res = await fetch(API_BASE + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: controller.signal });
+    const text = await res.text();
+    let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || 'Unexpected response' }; }
+    if (res.status === 401 && S.token) { signOut(); throw new Error(tr('common.sessionExpired')); }
+    if (!res.ok) { const e = new Error(data.error || tr('common.requestFailed')); e.code = data.code; e.data = data; e.status = res.status; throw e; }
+    return data;
+  } catch (e) {
+    // Abort has no e.status, so reqRetry() below still treats it as a transient
+    // failure (retries) and every existing caller's catch(e) block still fires.
+    if (e.name === 'AbortError') throw new Error(tr('common.timeout'));
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 // Retry through TRANSIENT failures only (network drop / 5xx); never retry 4xx.
 // Used for the /start stamp so a connectivity blip at task-open doesn't force a
@@ -101,24 +129,52 @@ const api = {
   buyCoins: (amount) => req('POST', '/payments/create-checkout', { amount, return_url: location.origin }),
   adminStatus: () => req('GET', '/admin/status'),
   adminStats: () => req('GET', '/admin/stats'),
-  config: () => req('GET', '/tasks/config'),
+  config: (lang) => req('GET', '/tasks/config' + (lang ? '?lang=' + encodeURIComponent(lang) : '')),
   adminSaveSettings: (d) => req('PATCH', '/admin/settings', d),
   adminMode: (mode) => req('POST', '/admin/mode', { mode }),
   adminUsers: (params) => { const qs = new URLSearchParams(params || {}).toString(); return req('GET', '/admin/users' + (qs ? '?' + qs : '')); },
   adminBan: (email, unban) => req('POST', '/admin/ban', { email, unban }),
+  adminAddCoins: (email, amount) => req('POST', '/admin/coins', { email, amount }),
   adminPromote: (email, role) => req('POST', '/admin/promote', { email, role }),
 };
 
 // Admin panel draft state
 const A = { stats: {}, mode: 'live', settings: {}, userQuery: '', users: [], saving: false, msg: '', err: '', userErr: '' };
+// Like+Comment / Sub+Like are DERIVED from the atoms below (Economy & Watch Redesign
+// 2026-07-11) — no longer separate admin inputs; see adminDerivedHTML() for the
+// read-only preview. margin_pct replaces the old flat house_margin (owner cost =
+// ceil(earn * (1 + margin_pct/100))).
 const ADMIN_FIELDS = [
   ['coins_subscribe', 'Subscribe reward'], ['coins_like', 'Like reward'],
-  ['coins_like_comment', 'Like+Comment reward'], ['coins_subscribe_like', 'Sub+Like reward'],
   ['coins_watch', 'Watch reward'], ['comment_bonus', 'Comment bonus'],
-  ['house_margin', 'House margin'], ['completion_delay_seconds', 'Verify delay (s)'],
+  ['margin_pct', 'Margin %'], ['completion_delay_seconds', 'Verify delay (s)'],
   ['daily_limit_user', 'Daily limit (user)'], ['daily_limit_premium', 'Daily limit (premium)'],
   ['max_campaigns_per_user', 'Max campaigns/user'], ['max_watch_per_day', 'Watch tasks/day'],
 ];
+// The backend stores margin_pct as a FRACTION (0.25); the admin field is labeled "%"
+// and holds a WHOLE PERCENT (25). Convert on load (×100) and on save (÷100) — same
+// pattern as mobile AdminScreen. adminDerivedHTML's /100 assumes whole-percent too.
+function adminSettingsIn(s) {
+  const out = { ...s };
+  if (out.margin_pct != null) out.margin_pct = Math.round(Number(out.margin_pct) * 100);
+  return out;
+}
+// Read-only preview of the derived combo rewards/costs — recomputed from the current
+// (possibly unsaved) draft values so an admin sees the effect before hitting Save.
+function adminDerivedHTML() {
+  const sub = Number(A.settings.coins_subscribe) || 0;
+  const like = Number(A.settings.coins_like) || 0;
+  const cbonus = Number(A.settings.comment_bonus) || 0;
+  const marginPct = Number(A.settings.margin_pct) || 0;
+  const mult = 1 + marginPct / 100;
+  const cost = (earn) => Math.ceil(earn * mult);
+  const subLike = sub + like;
+  const likeComment = like + cbonus;
+  return `
+    <div class="row"><span class="l">Sub+Like reward (derived)</span><span>${subLike} 🪙 · cost ${cost(subLike)}</span></div>
+    <div class="row"><span class="l">Like+Comment reward (derived)</span><span>${likeComment} 🪙 · cost ${cost(likeComment)}</span></div>`;
+}
+function updateAdminDerived() { const el = document.getElementById('admin-derived'); if (el) el.innerHTML = adminDerivedHTML(); }
 
 // ── buy coins (NowPayments) ───────────────────────────────────────────────────
 const COIN_PACKAGES = [20, 50, 100, 250];
@@ -264,14 +320,20 @@ function txText(desc) {
 }
 
 function estimateCost(type, slots, watchMins) {
-  let perSlot = SLOT_COSTS[type] ?? 0;
-  if (type === 'watch') perSlot += Math.max(0, (watchMins || 1) - 1) * (WATCH_EXTRA.cost || 1);
+  const perSlot = type === 'watch' ? tieredWatchCost(watchMins) : (SLOT_COSTS[type] ?? 0);
   return perSlot * (slots || 0);
 }
 
 // Price-box HTML: total = per-slot × slots, recomputed live as the user types.
+// "Full length" watch campaigns don't know the real duration until the server fetches
+// it at creation, so show an "up to" estimate at the cap instead of a false-precise number.
 function priceHTML() {
   const slots = parseInt(C.slots, 10) || 0;
+  if (C.type === 'watch' && C.fullLength) {
+    const per = tieredWatchCost(FULL_LENGTH_CAP_MIN);
+    const total = per * slots;
+    return tr('grow.priceFullLength', { cost: total, per, cap: FULL_LENGTH_CAP_MIN });
+  }
   const mins = parseInt(C.watchMins, 10) || 1;
   const per = estimateCost(C.type, 1, mins);
   const total = per * slots;
@@ -284,13 +346,16 @@ function updatePrice() { const el = document.getElementById('pricebox'); if (el)
 // ── data loading ──────────────────────────────────────────────────────────────
 async function loadTab(tab) {
   S.tab = tab; setDocTitle(tab); render();
+  // Load runtime config ONCE at startup (on ANY tab) so the maintenance banner + the
+  // announcement popup work on every screen — not only after visiting Earn/Grow.
+  if (!S.config) api.config(window.I18N.getLang()).then(c => { S.config = c; render(); maybeShowAnnouncement(); }).catch(() => {});
   try {
-    if (tab === 'earn') { S.tasks = await api.tasks(S.taskFilter); api.config().then(c => { S.config = c; render(); }).catch(() => {}); }
-    else if (tab === 'grow') { [S.myTasks, S.channels] = await Promise.all([api.myTasks(), api.channels()]); api.config().then(c => { S.config = c; render(); }).catch(() => {}); }
+    if (tab === 'earn') { S.tasks = await api.tasks(S.taskFilter); api.config(window.I18N.getLang()).then(c => { S.config = c; render(); }).catch(() => {}); }
+    else if (tab === 'grow') { [S.myTasks, S.channels] = await Promise.all([api.myTasks(), api.channels()]); api.config(window.I18N.getLang()).then(c => { S.config = c; render(); }).catch(() => {}); }
     else if (tab === 'wallet') S.txs = (await api.txs(1)).transactions || [];
     else if (tab === 'home') { [S.myTasks, S.txs] = await Promise.all([api.myTasks(), api.txs(1).then(r => r.transactions || [])]); }
     else if (tab === 'referral') S.referral = await api.getReferral().catch(() => null);
-    else if (tab === 'admin') { const [st, dash] = await Promise.all([api.adminStatus(), api.adminStats().catch(() => null)]); A.stats = st.stats; A.mode = st.api_mode; A.settings = { ...st.settings }; A.dashboard = dash; }
+    else if (tab === 'admin') { const [st, dash] = await Promise.all([api.adminStatus(), api.adminStats().catch(() => null)]); A.stats = st.stats; A.mode = st.api_mode; A.settings = adminSettingsIn(st.settings); A.dashboard = dash; }
     else if (tab === 'profile') S.user = (await api.me()) || S.user;
     if (tab !== 'profile' && S.token) { api.me().then(d => { S.user = d; render(); }).catch(() => {}); }
   } catch (e) { console.warn('load error', e.message); }
@@ -306,6 +371,10 @@ async function openTask(taskId) {
   // Watch tasks play inside the app via the embedded YouTube player (timer bound to
   // real playback). Everything else uses the open-YouTube modal.
   if (task.task_type === 'watch') { openWatchPlayer(task); return; }
+  // One /start check in flight at a time — also stops a fast double-tap from stacking
+  // multiple bounded reqRetry() chains (api.start retries transient failures up to 4x).
+  if (S.openingTaskId) return;
+  S.openingTaskId = task.id; render(); // spinner on the tapped card BEFORE the await — no more silent freeze on a slow backend
   // Confirm eligibility server-side BEFORE showing the do-the-action modal: if the target
   // was already earned (stale feed) or the campaign is paused/cancelled/full, bail now so
   // the user never does unpaid work — drop the dead card and refresh the list.
@@ -313,6 +382,7 @@ async function openTask(taskId) {
     await api.start(task.id);
   } catch (e) {
     if (['ALREADY_EARNED', 'ALREADY_COMPLETED', 'CAMPAIGN_FULL', 'CAMPAIGN_PAUSED', 'CAMPAIGN_CANCELLED', 'CAMPAIGN_UNAVAILABLE'].includes(e.code)) {
+      S.openingTaskId = null;
       S.tasks = S.tasks.filter(t => t.id !== task.id); render();
       showAlert(e.message || tr('modal.unavailable'));
       api.tasks(S.taskFilter).then(list => { S.tasks = list; render(); }).catch(() => {});
@@ -320,6 +390,7 @@ async function openTask(taskId) {
     }
     // transient/other → proceed; the /verify NOT_STARTED path re-stamps and waits.
   }
+  S.openingTaskId = null;
   S.modal = { task, status: 'idle', countdown: 0, startedAt: null, error: '', message: '', help: null };
   render();
   // For like+comment, load what-to-comment help (owner templates + optional AI example).
@@ -335,8 +406,9 @@ function closeModal() { S.modal = null; if (countdownTimer) clearInterval(countd
 // Self-contained overlay appended to <body> so the app's innerHTML re-renders can't
 // destroy the running YouTube iframe. Timer counts ONLY real playing seconds (and
 // pauses when the tab is hidden). The server enforces the same watch-time floor.
-const WP = { queue: [], idx: 0, watched: 0, required: 60, playing: false, player: null, timer: null, claimed: false, el: null, auto: false, autoCount: 0, claiming: false };
+const WP = { queue: [], idx: 0, watched: 0, required: 60, playing: false, player: null, timer: null, claimed: false, el: null, auto: false, autoCount: 0, claiming: false, nextCheck: 0 };
 const WP_PRESENCE_EVERY = 4; // ask "still watching?" every N auto-advanced videos
+const WP_INVIDEO_CHECK_SEC = 4 * 60; // ALSO ask "still watching?" every 4 min WITHIN the same video (closes the AFK-autoplay farm hole the tiered watch reward would otherwise open — Economy & Watch Redesign 2026-07-11 §2)
 let _ytReady = false, _ytCbs = [];
 function loadYT(cb) {
   if (window.YT && window.YT.Player) return cb();
@@ -357,10 +429,12 @@ function wpStyles() {
   .wp-close{width:32px;height:32px;border-radius:16px;background:var(--bg,#0b0b12);border:1px solid var(--border,#2a2a38);color:var(--text,#fff);cursor:pointer;font-weight:700}
   .wp-title{flex:1;font-weight:700;color:var(--text,#fff);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .wp-reward{background:rgba(245,196,81,.15);color:var(--gold,#f5c451);padding:4px 10px;border-radius:10px;font-weight:800;font-size:13px}
-  .wp-player{width:100%;aspect-ratio:16/9;background:#000}
+  .wp-player{position:relative;width:100%;aspect-ratio:16/9;background:#000}
   .wp-player iframe{width:100%;height:100%}
+  .wp-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
   .wp-embed-err{color:var(--text2,#b9b9c6);padding:24px;text-align:center;font-size:14px}
   .wp-body{padding:16px;display:flex;flex-direction:column;gap:10px}
+  .wp-queue-note{font-size:12px;color:var(--text2,#b9b9c6);text-align:center;margin-top:-4px;min-height:14px}
   .wp-track{height:10px;border-radius:99px;background:var(--bg,#0b0b12);overflow:hidden;border:1px solid var(--border,#2a2a38)}
   .wp-fill{height:100%;width:0;background:var(--primary,#6C63FF);transition:width .3s}
   .wp-time{font-size:13px;color:var(--text2,#b9b9c6);text-align:center;font-weight:600}
@@ -386,16 +460,17 @@ async function openWatchPlayer(task) {
   if (WP.opening) return;           // guard against a double-tap race during the await
   WP.opening = true;
   wpStyles();
-  let list = [];
-  try { list = await api.tasks('watch'); } catch (_) {}
-  list = (list || []).filter(x => !x.already_completed);
-  WP.queue = [task, ...list.filter(x => x.id !== task.id)];
+  // Render the overlay (with a spinner over the player area) SYNCHRONOUSLY, before any
+  // network call — previously this awaited api.tasks('watch') first, so a slow backend
+  // meant a blank screen after the tap. The tapped task always plays; the extra queue
+  // (for auto-advance/skip) is merged in below once it loads, in the background.
+  WP.queue = [task];
   WP.idx = 0;
   if (!WP.el) {
     const el = document.createElement('div'); el.className = 'wp-overlay';
     el.innerHTML = `<div class="wp-card"><div class="wp-head"><button class="wp-close">✕</button><div class="wp-title"></div><div class="wp-reward"></div></div>
-      <div class="wp-player"><div id="wp-yt"></div></div>
-      <div class="wp-body"><div class="wp-track"><div class="wp-fill"></div></div><div class="wp-time"></div><div class="wp-status"></div>
+      <div class="wp-player"><div id="wp-yt"></div><div class="wp-loading"><div class="spinner"></div></div></div>
+      <div class="wp-body"><div class="wp-track"><div class="wp-fill"></div></div><div class="wp-time"></div><div class="wp-status"></div><div class="wp-queue-note"></div>
       <button class="wp-primary"></button><button class="wp-skip"></button><button class="wp-auto"><span class="wp-auto-label"></span><span class="wp-toggle"><span class="wp-toggle-knob"></span></span></button></div></div>`;
     document.body.appendChild(el); WP.el = el;
     el.querySelector('.wp-close').onclick = wpClose;
@@ -406,12 +481,30 @@ async function openWatchPlayer(task) {
       if (WP.auto && WP.watched >= WP.required && !WP.claimed && !WP.claiming) wpClaim();
     };
   }
-  wpLoad();
+  wpLoad(); // starts the tapped video right away — never blocked by the queue fetch below
+  // Load the rest of the watchable queue in the background. On success, merge it in so
+  // skip/auto-advance can reach it; on failure, leave the single-task queue as-is (an
+  // "empty" queue is a perfectly valid state) and surface a small inline notice instead
+  // of failing silently.
+  try {
+    const list = await api.tasks('watch');
+    // Guard against a stale response: skip the merge if the overlay was closed, or the
+    // user already skipped past this task, while the fetch was in flight.
+    if (WP.el && wpCurrent() && wpCurrent().id === task.id) {
+      const extra = (list || []).filter(x => !x.already_completed && x.id !== task.id);
+      WP.queue = [task, ...extra];
+      wpUpdate();
+    }
+  } catch (_) {
+    const note = WP.el && WP.el.querySelector('.wp-queue-note');
+    if (note) note.textContent = tr('common.requestFailed');
+  }
   WP.opening = false;
 }
 async function wpLoad() {
   const t = wpCurrent(); if (!t) return wpClose();
   WP.watched = 0; WP.claimed = false; WP.playing = false;
+  WP.nextCheck = WP_INVIDEO_CHECK_SEC; // reset the in-video presence-check clock per video
   if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
   WP.required = Math.max(1, (parseInt(t.watch_minutes, 10) || 1) * 60);
   // Confirm eligibility before playing — don't make the user watch a video they can't be
@@ -451,7 +544,14 @@ function wpSetPlaying(p) {
     WP.timer = setInterval(() => {
       if (document.hidden) return;
       WP.watched = Math.min(WP.required, WP.watched + 1);
-      if (WP.watched >= WP.required && WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+      if (WP.watched >= WP.required) {
+        if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+        wpUpdate();
+        return;
+      }
+      // In-video presence check: every WP_INVIDEO_CHECK_SEC of watched time WITHIN the
+      // same video, pause and require a tap — independent of the cross-video check below.
+      if (WP.watched >= WP.nextCheck) { wpInVideoPresenceCheck(); return; }
       wpUpdate();
     }, 1000);
   } else if (!p && WP.timer) { clearInterval(WP.timer); WP.timer = null; }
@@ -503,18 +603,47 @@ async function wpClaim() {
     else showAlert(e.message || tr('common.requestFailed'));
   }
 }
-function wpStillWatching() {
+// Shared "Still watching?" tap-to-continue overlay — used both by the cross-video
+// (every WP_PRESENCE_EVERY auto-advanced videos) and the in-video (every
+// WP_INVIDEO_CHECK_SEC seconds within the SAME video) presence checks.
+function wpPresenceOverlay(onContinue) {
   wpStyles();
+  const old = document.getElementById('wp-sw'); if (old) old.remove(); // no stacked dupes
   const ov = document.createElement('div'); ov.className = 'wp-sw'; ov.id = 'wp-sw';
   ov.innerHTML = `<div class="wp-sw-card"><div style="font-size:40px">👀</div><div class="wp-sw-title"></div><div class="wp-sw-msg"></div><button class="wp-sw-btn"></button></div>`;
   ov.querySelector('.wp-sw-title').textContent = tr('watch.stillTitle');
   ov.querySelector('.wp-sw-msg').textContent = tr('watch.stillMsg');
   const btn = ov.querySelector('.wp-sw-btn'); btn.textContent = tr('watch.continue');
-  btn.onclick = () => { ov.remove(); WP.autoCount = 0; if (WP.el) wpNext(); };
+  btn.onclick = () => { ov.remove(); onContinue(); };
   document.body.appendChild(ov);
 }
+function wpStillWatching() {
+  wpPresenceOverlay(() => { WP.autoCount = 0; if (WP.el) wpNext(); });
+}
+// In-video presence check (NEW — closes the AFK-autoplay hole the tiered watch reward
+// would otherwise open): pause the SAME video and require a tap to resume, every
+// WP_INVIDEO_CHECK_SEC of watched time. Directly stops the counting timer (rather than
+// waiting on the async YT onStateChange round-trip) so no extra seconds sneak in while
+// the overlay is up; tapping "continue" resumes playback and the existing onStateChange
+// handler (wpSetPlaying) restarts the timer on its own.
+function wpInVideoPresenceCheck() {
+  WP.playing = false;
+  if (WP.timer) { clearInterval(WP.timer); WP.timer = null; }
+  try { WP.player && WP.player.pauseVideo && WP.player.pauseVideo(); } catch (_) {}
+  wpUpdate();
+  wpPresenceOverlay(() => {
+    WP.nextCheck += WP_INVIDEO_CHECK_SEC;
+    try { WP.player && WP.player.playVideo && WP.player.playVideo(); } catch (_) {}
+  });
+}
 function wpNext() {
-  if (WP.idx < WP.queue.length - 1) { WP.idx++; wpLoad(); } else wpClose();
+  if (WP.idx < WP.queue.length - 1) { WP.idx++; wpLoad(); return; }
+  // Ran out of watchable queue. In autoplay this used to end silently — now stop
+  // cleanly and tell the user why (no more tasks / possibly today's cap), instead of
+  // just closing the player with no explanation.
+  const wasAuto = WP.auto;
+  wpClose();
+  if (wasAuto) showAlert(tr('watch.queueEndMsg'), tr('watch.queueEndTitle'));
 }
 function wpEmbedError() {
   if (!WP.el) return;
@@ -610,7 +739,10 @@ async function modalVerify() {
 }
 
 // ── create campaign ───────────────────────────────────────────────────────────
-const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', creating: false, error: '', ok: '', channelId: null, newChannelUrl: '', addingChannel: false, exampleIds: [] };
+const C = { type: 'subscribe', slots: '', videoUrl: '', watchMins: '1', fullLength: false, creating: false, error: '', ok: '', channelId: null, newChannelUrl: '', addingChannel: false, exampleIds: [] };
+// "Full length" toggle for watch campaigns — required minutes become ceil(video
+// length/60) capped at FULL_LENGTH_CAP_MIN, computed server-side at creation.
+function toggleFullLength() { C.fullLength = !C.fullLength; render(); }
 function toggleCExample(id) {
   const i = C.exampleIds.indexOf(id);
   if (i >= 0) C.exampleIds.splice(i, 1);
@@ -650,11 +782,12 @@ async function createCampaign() {
       task_type: C.type,
       subscribers_wanted: slots,
       target_video_url: needsVideo ? C.videoUrl.trim() : undefined,
-      watch_minutes: C.type === 'watch' ? parseInt(C.watchMins, 10) || 1 : undefined,
+      watch_minutes: (C.type === 'watch' && !C.fullLength) ? (parseInt(C.watchMins, 10) || 1) : undefined,
+      full_length: (C.type === 'watch' && C.fullLength) ? true : undefined,
       comment_example_ids: C.type === 'like_comment' ? C.exampleIds : undefined,
     });
     C.ok = res.owner ? tr('grow.createdFree') : tr('grow.created', { coins: res.coins_spent });
-    C.slots = ''; C.videoUrl = ''; C.exampleIds = [];
+    C.slots = ''; C.videoUrl = ''; C.exampleIds = []; C.fullLength = false;
     [S.myTasks, S.user] = [await api.myTasks(), await api.me()];
   } catch (e) { C.error = e.message; }
   C.creating = false; render();
@@ -735,12 +868,15 @@ async function adminSave() {
   A.msg = ''; A.err = ''; A.saving = true; render();
   try {
     const payload = {};
-    ADMIN_FIELDS.forEach(([k]) => { if (A.settings[k] !== '' && A.settings[k] != null) payload[k] = parseInt(A.settings[k], 10); });
+    ADMIN_FIELDS.forEach(([k]) => { if (A.settings[k] !== '' && A.settings[k] != null) payload[k] = k === 'margin_pct' ? parseFloat(A.settings[k]) / 100 : parseInt(A.settings[k], 10); });
     if (Array.isArray(A.settings.disabled_task_types)) payload.disabled_task_types = A.settings.disabled_task_types;
     if (A.settings.daily_cap_by_type && typeof A.settings.daily_cap_by_type === 'object') payload.daily_cap_by_type = A.settings.daily_cap_by_type;
     if (typeof A.settings.maintenance_message === 'string') payload.maintenance_message = A.settings.maintenance_message;
+    if (typeof A.settings.announcement_message === 'string') payload.announcement_message = A.settings.announcement_message;
+    if (typeof A.settings.announcement_link === 'string') payload.announcement_link = A.settings.announcement_link;
+    if (A.settings.announcement_platform) payload.announcement_platform = A.settings.announcement_platform;
     const res = await api.adminSaveSettings(payload);
-    A.settings = { ...res.settings };
+    A.settings = adminSettingsIn(res.settings);
     A.msg = 'Settings saved.';
   } catch (e) { A.err = e.message; }
   A.saving = false; render();
@@ -802,15 +938,22 @@ function vEarn() {
   const chips = [null, ...TASK_TYPES].map(t =>
     `<button class="chip ${S.taskFilter === t ? 'active' : ''}" data-act="setFilter"${t ? ` data-a="${t}"` : ''}>${t ? taskLabel(t) : tr('earn.all')}</button>`
   ).join('');
-  const list = S.tasks.length ? S.tasks.map(t => `
-    <div class="card task" data-act="openTask" data-a="${esc(String(t.id))}">
+  const list = S.tasks.length ? S.tasks.map(t => {
+    const opening = S.openingTaskId === t.id;
+    // While ANY card's /start check is in flight, dim the others so a second tap can't
+    // stack another retry chain (openTask() also guards this in JS) — only the tapped
+    // card gets the spinner.
+    const blocked = !!S.openingTaskId && !opening;
+    return `
+    <div class="card task${opening ? ' opening' : ''}"${blocked ? ' style="opacity:.5;pointer-events:none"' : ''} data-act="openTask" data-a="${esc(String(t.id))}">
       <div class="avatar">${t.owner_avatar ? `<img src="${esc(t.owner_avatar)}" alt="" referrerpolicy="no-referrer">` : (TASK_ICON[t.task_type] || '📺')}</div>
       <div class="info">
         <div class="name">${esc(t.channel_name || t.owner_name)}</div>
         <div class="meta">${taskLabel(t.task_type)}${t.task_type === 'watch' ? ` · ${esc(t.watch_minutes)} ${tr('earn.min')}` : ''}</div>
       </div>
-      <div class="reward">+${t.reward} 🪙</div>
-    </div>`).join('')
+      ${opening ? '<div class="spinner" style="width:18px;height:18px;border-width:2px;margin:0"></div>' : `<div class="reward">+${t.reward} 🪙</div>`}
+    </div>`;
+  }).join('')
     : `<div class="empty">${tr('earn.none')}<br>${tr('earn.checkBack')}</div>`;
   return vHeader(tr('earn.title')) + `<div class="screen"><div class="chips">${chips}</div>${list}</div>`;
 }
@@ -898,7 +1041,10 @@ function vGrow() {
     ${C.type === 'like_comment' ? `<div class="label">${esc(tr('earn.pickCommentExamples'))}</div>
       <div style="display:flex;flex-direction:column;gap:6px">${(Array.isArray(window.I18N.t('earn.commentExamples')) ? window.I18N.t('earn.commentExamples') : []).map((s, id) => `<button type="button" class="chip ${C.exampleIds.includes(id) ? 'active' : ''}" style="text-align:left;white-space:normal" data-act="toggleCExample" data-a="${id}">${C.exampleIds.includes(id) ? '✓ ' : ''}${esc(s)}</button>`).join('')}</div>` : ''}
     ${C.type === 'watch' ? `<div class="label">${tr('grow.minutes')}</div>
-      <input id="c-mins" type="number" min="1" max="60" value="${esc(C.watchMins)}" data-model="C.watchMins" data-on="updatePrice">` : ''}
+      <input id="c-mins" type="number" min="1" max="60" value="${esc(C.watchMins)}" data-model="C.watchMins" data-on="updatePrice" ${C.fullLength ? 'disabled' : ''}>
+      <button type="button" class="chip ${C.fullLength ? 'active' : ''}" style="margin-top:8px" data-act="toggleFullLength">${C.fullLength ? '✅' : '☐'} ${tr('grow.fullLength')}</button>
+      <p class="hint" style="margin-top:4px">${tr('grow.fullLengthHint', { cap: FULL_LENGTH_CAP_MIN })}</p>
+      <p class="hint" style="margin-top:6px;line-height:1.5">${tr('grow.tieredHint')}</p>` : ''}
     <div class="label">${C.type === 'subscribe' ? tr('grow.howManySubs') : tr('grow.howManyCompletions')}</div>
     <input id="c-slots" type="number" min="1" placeholder="10" value="${esc(C.slots)}" data-model="C.slots" data-on="updatePrice">
     <div class="pricebox" id="pricebox">${priceHTML()}</div>
@@ -1066,12 +1212,36 @@ function vHome() {
   </div>`;
 }
 
+async function adminAddCoins(email, input) {
+  if (A.coinBusy) return;                       // guard against double-click double-apply
+  const amt = parseInt(input && input.value, 10);
+  if (!Number.isInteger(amt) || amt === 0) { showAlert('Enter a non-zero amount (e.g. 100, or -50 to remove).'); return; }
+  A.coinBusy = true;
+  try {
+    const r = await api.adminAddCoins(email, amt);
+    A.users = A.users.map(u => u.email === email ? { ...u, coins: r.user.coins } : u);
+    render();
+    showAlert(`${r.applied >= 0 ? 'Added' : 'Removed'} ${Math.abs(r.applied)} coins. ${email} now has 🪙${r.user.coins}.`);
+  } catch (e) { showAlert(e.message || 'Failed to update coins.'); }
+  finally { A.coinBusy = false; }
+}
+// One-time announcement popup — shows if targeted to web and the exact text hasn't been
+// dismissed yet (re-shows automatically when the admin changes the message).
+function maybeShowAnnouncement() {
+  const c = S.config; if (!c || !c.announcement_message) return;
+  const plat = c.announcement_platform || 'both';
+  if (plat !== 'both' && plat !== 'web') return;
+  if (localStorage.getItem('ann_seen') === c.announcement_message) return;
+  S.announcement = { message: c.announcement_message, link: c.announcement_link || '' };
+  render();
+}
+
 function vAdmin() {
   const s = A.stats || {};
   const tile = (label, val) => `<div class="card" style="flex:1;min-width:110px;text-align:center;margin-bottom:0"><div style="font-size:20px;font-weight:800">${val ?? 0}</div><div class="hint">${label}</div></div>`;
   const fields = ADMIN_FIELDS.map(([k, label]) => `
     <div class="row"><span class="l">${label}</span>
-      <input type="number" min="0" value="${esc(A.settings[k] ?? '')}" data-model="A.settings.${k}" style="width:90px;padding:8px;text-align:right"></div>`).join('');
+      <input type="number" min="0" ${k === 'margin_pct' ? 'step="0.1"' : ''} value="${esc(A.settings[k] ?? '')}" data-model="A.settings.${k}" data-on="updateAdminDerived" style="width:90px;padding:8px;text-align:right"></div>`).join('');
   const users = A.users.map(u => `
     <div class="card">
       <div><b>${esc(u.name || u.email)}</b> <span style="color:var(--gold)">🔔 ${u.subscriber_count ?? 0} subs</span>
@@ -1081,6 +1251,10 @@ function vAdmin() {
                       : `<button class="btn small danger-outline" data-act="adminBanUser" data-a="${esc(u.email)}" data-b="0">Ban</button>`}
         ${u.role === 'premium' ? `<button class="btn small secondary" data-act="adminPromoteUser" data-a="${esc(u.email)}" data-b="user">↓ User</button>`
                                : `<button class="btn small secondary" data-act="adminPromoteUser" data-a="${esc(u.email)}" data-b="premium">↑ Premium</button>`}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input type="number" class="coin-input" placeholder="± coins" style="width:110px;padding:6px;text-align:right">
+        <button class="btn small" data-act="adminAddCoins" data-a="${esc(u.email)}">Add / remove coins</button>
       </div>
     </div>`).join('');
   return vHeader('🛠 Admin') + `
@@ -1097,6 +1271,7 @@ function vAdmin() {
     </div>
     <div class="label" style="margin-top:18px">Economy & limits</div>
     <div class="card">${fields}</div>
+    <div class="card" id="admin-derived" style="font-size:13px">${adminDerivedHTML()}</div>
     <div class="label" style="margin-top:18px">Task types (tap to enable / disable)</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       ${TASK_TYPES.map(t => { const off = (A.settings.disabled_task_types || []).includes(t);
@@ -1106,6 +1281,12 @@ function vAdmin() {
     <div class="card">${TASK_TYPES.map(t => `<div class="row"><span class="l">${taskLabel(t)}</span><input type="number" min="0" value="${esc(String((A.settings.daily_cap_by_type || {})[t] || 0))}" data-on="dailyCap" data-a="${t}" style="width:90px;padding:8px;text-align:right"></div>`).join('')}</div>
     <div class="label" style="margin-top:14px">Maintenance banner (empty = none)</div>
     <textarea data-model="A.settings.maintenance_message" style="width:100%;min-height:52px;padding:8px;box-sizing:border-box" placeholder="Shown as a banner to all users">${esc(A.settings.maintenance_message || '')}</textarea>
+    <div class="label" style="margin-top:14px">Announcement popup (empty = none) — shows once when a user opens the app</div>
+    <textarea data-model="A.settings.announcement_message" style="width:100%;min-height:52px;padding:8px;box-sizing:border-box" placeholder="e.g. We're moving to the web — your coins are already here!">${esc(A.settings.announcement_message || '')}</textarea>
+    <input type="text" data-model="A.settings.announcement_link" value="${esc(A.settings.announcement_link || '')}" placeholder="Optional clickable link (https://…)" style="width:100%;margin-top:6px;padding:8px;box-sizing:border-box">
+    <div style="display:flex;gap:6px;margin-top:6px">
+      ${['both','web','mobile'].map(p => `<button class="chip ${((A.settings.announcement_platform)||'both')===p?'active':''}" data-act="adminSetAnnPlatform" data-a="${p}">${p==='both'?'📱+🌐 Both':p==='web'?'🌐 Web':'📱 Mobile'}</button>`).join('')}
+    </div>
     ${A.dashboard ? `<div class="label" style="margin-top:18px">Campaigns by type (active · slots left)</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">${(A.dashboard.campaigns_by_type || []).map(c => tile(taskLabel(c.task_type), `${c.active} · ${c.remaining_slots}`)).join('')}</div>
       <div class="label" style="margin-top:14px">Today</div>
@@ -1114,7 +1295,7 @@ function vAdmin() {
     ${A.err ? `<p class="error">${esc(A.err)}</p>` : ''}${A.msg ? `<p class="success-text">${esc(A.msg)}</p>` : ''}
     <div class="label" style="margin-top:22px">Users</div>
     <div style="display:flex;gap:8px">
-      <input type="text" placeholder="Search email…" value="${esc(A.userQuery)}" data-model="A.userQuery" style="flex:1">
+      <input type="text" placeholder="Search email or name…" value="${esc(A.userQuery)}" data-model="A.userQuery" style="flex:1">
       <button class="btn small secondary" style="white-space:nowrap" data-act="adminSearchUsers">Search</button>
       <button class="btn small" style="white-space:nowrap" data-act="adminTopCreators">🔔 Top creators</button>
     </div>
@@ -1139,7 +1320,14 @@ function render() {
   const view = { home: vHome, earn: vEarn, grow: vGrow, wallet: vWallet, profile: vProfile, admin: vAdmin, buy: vBuy, referral: vReferral }[S.tab] || vEarn;
   const maint = (S.config && S.config.maintenance_message)
     ? `<div style="background:rgba(245,196,81,.15);color:var(--gold,#f5c451);padding:10px 14px;text-align:center;font-weight:700;font-size:13px">🚧 ${esc(S.config.maintenance_message)}</div>` : '';
-  root.innerHTML = maint + view() + vTabbar() + vModal();
+  const ann = S.announcement ? `<div class="ann-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px">
+    <div class="card" style="max-width:360px;width:100%;margin:0">
+      <div style="font-weight:800;font-size:16px;margin-bottom:8px">🔔 Announcement</div>
+      <div style="white-space:pre-wrap;line-height:1.5">${esc(S.announcement.message)}</div>
+      ${(S.announcement.link && /^https?:\/\//i.test(S.announcement.link)) ? `<a class="btn" href="${esc(S.announcement.link)}" target="_blank" rel="noopener" data-act="dismissAnnouncement" style="margin-top:12px;display:block;text-align:center;text-decoration:none">Open</a>` : ''}
+      <button class="btn secondary" data-act="dismissAnnouncement" style="margin-top:8px;width:100%">Got it</button>
+    </div></div>` : '';
+  root.innerHTML = maint + view() + vTabbar() + vModal() + ann;
 }
 
 // ── event delegation ──────────────────────────────────────────────────────────
@@ -1167,11 +1355,15 @@ const ACTIONS = {
   shareReferral,
   toggleCExample: (el) => toggleCExample(Number(el.dataset.a)),
   setCType: (el) => setCType(el.dataset.a),
+  toggleFullLength,
   signOut,
   deleteAccount,
   adminToggleType: (el) => adminToggleType(el.dataset.a),
   adminSave,
   adminSetMode: (el) => adminSetMode(el.dataset.a),
+  adminAddCoins: (el) => adminAddCoins(el.dataset.a, el.closest('.card') && el.closest('.card').querySelector('.coin-input')),
+  adminSetAnnPlatform: (el) => { A.settings.announcement_platform = el.dataset.a; render(); },
+  dismissAnnouncement: () => { if (S.announcement) { localStorage.setItem('ann_seen', S.announcement.message); S.announcement = null; render(); } },
   adminSearchUsers,
   adminTopCreators,
   adminBanUser: (el) => adminBanUser(el.dataset.a, el.dataset.b === '1'),
@@ -1181,6 +1373,7 @@ const INPUT_ACTIONS = {
   updatePrice,
   render,
   updateCustomBuy,
+  updateAdminDerived,
   dailyCap: (el) => { A.settings.daily_cap_by_type = Object.assign({}, A.settings.daily_cap_by_type, { [el.dataset.a]: parseInt(el.value, 10) || 0 }); },
 };
 function _setModel(el) {
@@ -1209,7 +1402,7 @@ document.addEventListener('input', _delegateInput);
 document.addEventListener('change', _delegateInput);
 
 // Legacy global exposure (no longer required now handlers are delegated, kept harmless).
-Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, S, buyCoins, buyCoinsCustom, updateCustomBuy, shareReferral, toggleCExample, adminToggleType,
+Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, toggleFullLength, openTask, closeModal, modalOpenYouTube, modalVerify, createCampaign, campaignAction, deleteAccount, changeLang, addChannelWeb, updatePrice, render, C, A, B, S, buyCoins, buyCoinsCustom, updateCustomBuy, shareReferral, toggleCExample, adminToggleType,
   gotoAdmin, adminSave, adminSetMode, adminSearchUsers, adminTopCreators, adminBanUser, adminPromoteUser });
 
 (async function init() {
@@ -1219,7 +1412,6 @@ Object.assign(window, { signIn, signOut, loadTab, setFilter, setCType, openTask,
   api.tiers().then((p) => {
     if (p && p.slot_costs) Object.assign(SLOT_COSTS, p.slot_costs);
     if (p && p.reward_per_type) Object.assign(REWARDS, p.reward_per_type);
-    if (p && Number.isFinite(p.watch_extra_min_cost)) WATCH_EXTRA.cost = p.watch_extra_min_cost;
     if (S.tab === 'grow') render();
   }).catch(() => {});
   const params = new URLSearchParams(location.search);

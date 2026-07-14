@@ -1,13 +1,10 @@
 // Locks in the platform economy nudge invariants (src/lib/platform.js):
 //  - web = base; mobile = per-type % (ceil cost / floor payout); watch = FLAT ±1
-//  - display parity: a client composing base + extras×unit lands EXACTLY on the
-//    server's charge/payout at every watch duration
+//  - the flat watch offset composes exactly on top of the TIERED watch curve
+//    (cfg.watchRewardFor / cfg.slotCostFor — compose-from-atoms 2026-07-11)
 //  - mint-safety: mobile payout ≤ slot_cost for every type × creation platform
 const { mobileCampaignCost, mobileEarnPayout } = require('../src/lib/platform');
-const { watchPricing } = require('../src/lib/economy');
 const cfg = require('../src/config');
-
-const MARGIN = 3;
 
 describe('platform nudge — percentage types', () => {
   test('mobile cost is ceil(base×(1+s)) and payout floor(base×(1−p)); web-safe direction', () => {
@@ -27,25 +24,24 @@ describe('platform nudge — percentage types', () => {
   });
 });
 
-describe('platform nudge — watch flat offset', () => {
-  test('display parity: composed client math == server charge/payout for 1..60 min', () => {
-    const tiersCost = mobileCampaignCost(cfg.REWARDS.watch + MARGIN, 'watch'); // slot_costs.watch (mobile)
-    const tiersRew = mobileEarnPayout(cfg.REWARDS.watch, 'watch');             // reward_per_type.watch (mobile)
+describe('platform nudge — watch flat offset over the tiered curve', () => {
+  test('mobile = tiered value ±1 flat at every duration (charge +1, payout −1)', () => {
     for (let m = 1; m <= 60; m++) {
-      const p = watchPricing(m, cfg.REWARDS.watch, MARGIN);
-      const charge = mobileCampaignCost(p.slotCost, 'watch'); // createTask
-      const payout = mobileEarnPayout(p.reward, 'watch');     // verify / feed
-      expect(tiersCost + (m - 1) * cfg.WATCH_COST_PER_EXTRA_MIN).toBe(charge);
-      expect(tiersRew + (m - 1) * cfg.WATCH_REWARD_PER_EXTRA_MIN).toBe(payout);
+      const reward = cfg.watchRewardFor(m);
+      const cost = cfg.slotCostFor('watch', m);
+      expect(mobileCampaignCost(cost, 'watch')).toBe(cost + cfg.MOBILE_WATCH_COST_FLAT);
+      // payout −1 flat, but never reduces a >0 web payout to 0 (reward ≥ 2 here)
+      expect(mobileEarnPayout(reward, 'watch')).toBe(reward - cfg.MOBILE_WATCH_EARN_FLAT);
     }
   });
 
   test('mint-safety: mobile payout ≤ slot_cost for every duration × creation platform', () => {
     for (let m = 1; m <= 60; m++) {
-      const p = watchPricing(m, cfg.REWARDS.watch, MARGIN);
-      const payout = mobileEarnPayout(p.reward, 'watch');
-      expect(payout).toBeLessThanOrEqual(p.slotCost);                        // web-created campaign
-      expect(payout).toBeLessThanOrEqual(mobileCampaignCost(p.slotCost, 'watch')); // mobile-created
+      const reward = cfg.watchRewardFor(m);
+      const cost = cfg.slotCostFor('watch', m);
+      const payout = mobileEarnPayout(reward, 'watch');
+      expect(payout).toBeLessThanOrEqual(cost);                              // web-created campaign
+      expect(payout).toBeLessThanOrEqual(mobileCampaignCost(cost, 'watch')); // mobile-created
     }
   });
 

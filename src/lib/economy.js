@@ -1,15 +1,9 @@
 // Pure, side-effect-free economy/verification helpers. No DB, no network — so they
 // are unit-testable in isolation (see tests/economy.test.js) and are the SINGLE
 // source of truth for this logic (taskController imports from here).
+// NOTE: watch/combo PRICING lives in src/config (rewardFor / slotCostFor /
+// watchRewardFor — compose-from-atoms, Economy & Watch Redesign 2026-07-11).
 const cfg = require('../config');
-
-// Watch pricing: base reward for 1 min + WATCH_REWARD_PER_EXTRA_MIN per extra minute;
-// owner slot cost = reward + house margin.
-function watchPricing(minutes, baseReward, margin) {
-  const extraMins = Math.max(0, minutes - 1);
-  const reward = baseReward + (extraMins * cfg.WATCH_REWARD_PER_EXTRA_MIN);
-  return { reward, slotCost: reward + margin };
-}
 
 // The permanent "already earned" ledger keys a completed task implies. A user may be
 // paid at most once per key, across all campaigns, forever.
@@ -42,4 +36,4 @@ function commentMeetsMinimum(text, minWords, minChars) {
   return words >= minWords || chars >= minChars;
 }
 
-module.exports = { watchPricing, earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum };
+module.exports = { earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum };

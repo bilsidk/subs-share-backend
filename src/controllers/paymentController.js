@@ -1,6 +1,6 @@
 const pool = require('../db/pool');
 const cfg = require('../config');
-const { createInvoice, verifyIPN } = require('../services/nowpaymentsService');
+const { createInvoice, verifyIPN, getPaymentStatus, listRecentPayments } = require('../services/nowpaymentsService');
 const googlePlay = require('../services/googlePlayService');
 const { MIN_PURCHASE_USD, calcPurchase, REWARDS, WATCH_COST_PER_EXTRA_MIN, WATCH_REWARD_PER_EXTRA_MIN, COMMENT_BONUS } = require('../config');
 const settings = require('../services/settingsService');
@@ -8,7 +8,7 @@ const { isMobileRequest, mobileCampaignCost, mobileEarnPayout } = require('../li
 
 // Only let the client choose the post-payment return origin from a known list,
 // so the success/cancel redirect can't be turned into an open redirect.
-const RETURN_ALLOWLIST = ['app.viralboostnow.com', 'viralboostnow.com', 'subs-share-backend-production.up.railway.app', 'localhost'];
+const RETURN_ALLOWLIST = ['app.viralboostnow.com', 'viralboostnow.com', 'localhost'];
 function resolveReturnBase(url) {
   if (typeof url !== 'string') return null;
   try {
@@ -86,7 +86,7 @@ async function createCheckout(req, res, next) {
     // Never derive the IPN callback from the client-supplied Host header (spoofable —
     // an attacker could redirect payment notifications). Use the configured API_URL,
     // falling back to the known production host.
-    const apiUrl = process.env.API_URL || 'https://subs-share-backend-production.up.railway.app';
+    const apiUrl = process.env.API_URL || 'https://viralboostnow.com/api';
     const appUrl = resolveReturnBase(req.body.return_url) || process.env.APP_URL || 'https://app.viralboostnow.com';
 
     const invoice = await createInvoice({
@@ -108,6 +108,40 @@ async function createCheckout(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// Exactly-once credit for a NOWPayments invoice. THE single crediting path — both the
+// signed IPN (handleIPN) and the reconcile cron (reconcilePendingCryptoPayments) call
+// this so crediting logic can never diverge. The atomic status claim is the exactly-once
+// guard: only the first caller to flip the row out of a terminal/credited state credits;
+// concurrent/retried/out-of-order callers see rowCount 0 and no-op. Crucially the claim
+// excludes BOTH 'finished' (already credited) AND 'refunded' (credited then clawed back),
+// so a delayed 'finished' arriving after a refund can never re-credit reversed coins.
+// Coin amount is re-read from the claimed row (RETURNING) — never trusted from the caller
+// or the IPN body. Returns true iff THIS call performed the credit.
+async function creditPending(invoiceId) {
+  const dbc = await pool.connect();
+  try {
+    await dbc.query('BEGIN');
+    const claim = await dbc.query(
+      `UPDATE pending_payments SET status='finished'
+         WHERE invoice_id=$1 AND status NOT IN ('finished','refunded')
+       RETURNING user_id, coins, bonus_pct, usd`,
+      [String(invoiceId)]
+    );
+    if (claim.rowCount === 0) { await dbc.query('ROLLBACK'); return false; }
+    const row = claim.rows[0];
+    const bonus = Math.floor(row.coins * row.bonus_pct / 100);
+    const total_coins = row.coins + bonus;
+    await dbc.query('UPDATE users SET coins = coins + $1 WHERE id = $2', [total_coins, row.user_id]);
+    await dbc.query(
+      `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, 'purchase', $3)`,
+      [row.user_id, total_coins, `tx:purchase|coins:${total_coins}|usd:${row.usd}|invoice:${invoiceId}`]
+    );
+    await dbc.query('COMMIT');
+    return true;
+  } catch (e) { await dbc.query('ROLLBACK'); throw e; }
+  finally { dbc.release(); }
+}
+
 async function handleIPN(req, res) {
   try {
     // verifyIPN throws if the IPN secret is unset — keep it inside try so a
@@ -117,38 +151,30 @@ async function handleIPN(req, res) {
       return res.status(403).json({ error: 'Invalid signature' });
     }
 
-    const { invoice_id, order_id, payment_status, actually_paid } = req.body;
+    const { invoice_id, order_id, payment_status, actually_paid, payment_id } = req.body;
     if (!invoice_id) return res.status(400).json({ error: 'Missing invoice_id' });
 
     const pp = await pool.query('SELECT * FROM pending_payments WHERE invoice_id=$1', [String(invoice_id)]);
     if (!pp.rows.length) return res.status(404).json({ error: 'Invoice not found' });
 
     const payment = pp.rows[0];
+
+    // Learn the NowPayments payment_id from this (signature-verified) IPN so the reconcile
+    // cron has a direct-lookup fallback. Metadata only — recorded once, never gates credit.
+    if (payment_id && payment.payment_id == null) {
+      await pool.query(
+        `UPDATE pending_payments SET payment_id=$1 WHERE invoice_id=$2 AND payment_id IS NULL`,
+        [String(payment_id), String(invoice_id)]
+      );
+    }
+
     if (payment.status === 'finished') return res.json({ ok: true });
 
     if (payment_status === 'finished') {
-      // Exactly-once credit: claim the row atomically so duplicate/retried IPNs
-      // (NowPayments retries) can't double-credit. The whole claim+credit runs in
-      // one transaction, so a failure rolls the claim back and a retry can re-run.
-      const dbc = await pool.connect();
-      try {
-        await dbc.query('BEGIN');
-        const claim = await dbc.query(
-          `UPDATE pending_payments SET status='finished' WHERE invoice_id=$1 AND status <> 'finished'`,
-          [String(invoice_id)]
-        );
-        if (claim.rowCount === 0) { await dbc.query('ROLLBACK'); return res.json({ ok: true }); }
-
-        const bonus = Math.floor(payment.coins * payment.bonus_pct / 100);
-        const total_coins = payment.coins + bonus;
-        await dbc.query('UPDATE users SET coins = coins + $1 WHERE id = $2', [total_coins, payment.user_id]);
-        await dbc.query(
-          `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, 'purchase', $3)`,
-          [payment.user_id, total_coins, `tx:purchase|coins:${total_coins}|usd:${payment.usd}|invoice:${invoice_id}`]
-        );
-        await dbc.query('COMMIT');
-      } catch (e) { await dbc.query('ROLLBACK'); throw e; }
-      finally { dbc.release(); }
+      // Exactly-once credit via the shared crediting path. The atomic claim inside
+      // creditPending() makes duplicate/retried/out-of-order IPNs (incl. a 'finished'
+      // arriving after a 'refunded') no-op instead of double- or re-crediting.
+      await creditPending(invoice_id);
     } else if (payment_status === 'refunded') {
       // The payment was refunded upstream. If we already credited coins for this invoice,
       // claw them back. The atomic finished->refunded transition fires the reversal at
@@ -183,8 +209,10 @@ async function handleIPN(req, res) {
       // Flag for manual review rather than risk an incorrect deduction.
       console.warn(`[payments] partially_refunded invoice=${invoice_id} — manual review needed`);
     } else if (['failed', 'expired', 'cancelled'].includes(payment_status)) {
+      // Don't let a late terminal-fail IPN overwrite a 'finished' (credited) or 'refunded'
+      // (credited-then-reversed) record — those are settled and drive reconcile decisions.
       await pool.query(
-        `UPDATE pending_payments SET status=$1 WHERE invoice_id=$2 AND status <> 'finished'`,
+        `UPDATE pending_payments SET status=$1 WHERE invoice_id=$2 AND status NOT IN ('finished','refunded')`,
         [payment_status, String(invoice_id)]
       );
     }
@@ -301,4 +329,75 @@ async function reconcileVoidedGooglePurchases() {
   return { checked: voided.length, reversed };
 }
 
-module.exports = { getTiers, createCheckout, handleIPN, verifyGooglePlay, reconcileVoidedGooglePurchases };
+// Reconcile crypto (NOWPayments) purchases whose crediting IPN was NEVER delivered — the
+// signed IPN is the only crediting path, so if the endpoint was down through the retry
+// window, or the IPN secret was misconfigured (every IPN rejected), the buyer paid real
+// crypto yet pending_payments stays 'pending' forever and coins are silently never
+// credited. Periodically ask NOWPayments for the TRUE status of still-pending invoices
+// past a grace window and, when finished, credit exactly-once through the SAME
+// creditPending() path the IPN uses (its atomic claim keeps IPN + reconcile from ever
+// double-crediting). We only ever have the invoice_id in this failure mode, so we map it
+// via the recent-payments list (each row carries invoice_id); a stored payment_id, if a
+// prior IPN happened to land, is used as a direct-lookup fallback. Best-effort; no-ops if
+// NOWPayments isn't configured (the API calls throw → caught here). Called from the
+// scheduler. NEVER credits on a guessed/mismatched id: an invoice matches only on an
+// EXACT invoice_id equality and a settled status, else it is left for the next run.
+async function reconcilePendingCryptoPayments() {
+  const GRACE_MINUTES = 30;   // give a live payment time to finish before we chase it
+  let pend;
+  try {
+    pend = await pool.query(
+      `SELECT invoice_id, payment_id, created_at FROM pending_payments
+        WHERE status IN ('pending','waiting')
+          AND created_at < NOW() - INTERVAL '${GRACE_MINUTES} minutes'
+          AND created_at > NOW() - INTERVAL '7 days'
+        ORDER BY created_at ASC
+        LIMIT 200`
+    );
+  } catch (e) {
+    console.error('[payments] reconcile query failed:', e.message);
+    return { checked: 0, credited: 0 };
+  }
+  if (!pend.rows.length) return { checked: 0, credited: 0 };
+
+  // One list call covers all pending rows: build invoice_id -> status, preferring the
+  // settled 'finished' status if the invoice has multiple payment attempts. We credit on
+  // 'finished' ONLY — the same bar the live IPN path uses — so a still-'confirmed' invoice
+  // is left for a later run once it settles.
+  const byInvoice = new Map();
+  try {
+    const oldest = new Date(pend.rows[0].created_at).getTime() - 60 * 60 * 1000;
+    const dateFrom = new Date(oldest).toISOString().slice(0, 10);
+    const list = await listRecentPayments({ dateFrom });
+    for (const p of list) {
+      const inv = p && p.invoice_id != null ? String(p.invoice_id) : null;
+      if (!inv) continue;
+      const st = p.payment_status;
+      const prev = byInvoice.get(inv);
+      if (st === 'finished' || !prev) byInvoice.set(inv, st);
+    }
+  } catch (e) {
+    console.error('[payments] reconcile list failed:', e.message);
+    return { checked: pend.rows.length, credited: 0 };
+  }
+
+  let credited = 0;
+  for (const row of pend.rows) {
+    const invoiceId = String(row.invoice_id);
+    let status = byInvoice.get(invoiceId);
+    // Fallback: a prior IPN may have recorded the payment_id even though crediting never
+    // ran — a direct GET confirms status if the list window missed it.
+    if (status !== 'finished' && row.payment_id) {
+      try { status = (await getPaymentStatus(row.payment_id))?.payment_status; }
+      catch (e) { /* transient — leave for next run */ }
+    }
+    if (status === 'finished') {
+      try { if (await creditPending(invoiceId)) credited++; }
+      catch (e) { console.error('[payments] reconcile credit failed', invoiceId, e.message); }
+    }
+  }
+  if (credited) console.log(`[payments] reconciled ${credited} un-credited crypto payment(s) of ${pend.rows.length} pending checked`);
+  return { checked: pend.rows.length, credited };
+}
+
+module.exports = { getTiers, createCheckout, handleIPN, verifyGooglePlay, reconcileVoidedGooglePurchases, reconcilePendingCryptoPayments };

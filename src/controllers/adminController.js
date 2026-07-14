@@ -96,11 +96,14 @@ const getAppSettings = async (req, res, next) => {
 const updateAppSettings = async (req, res, next) => {
   try {
     if (!(await requireOwner(req, res))) return;
+    // Economy redesign (2026-07-11): only the 4 atoms are admin-settable now — Sub+Like
+    // and Like+Comment rewards are DERIVED (sum of atoms) and no longer independently
+    // configurable, so 'coins_like_comment'/'coins_subscribe_like' are deliberately absent
+    // from this whitelist (any such fields in the request body are silently ignored).
     const allowed = [
       'daily_limit_user', 'daily_limit_premium',
-      'coins_subscribe', 'coins_like', 'coins_like_comment',
-      'coins_subscribe_like', 'coins_watch', 'comment_bonus',
-      'house_margin', 'completion_delay_seconds', 'max_campaigns_per_user',
+      'coins_subscribe', 'coins_like', 'coins_watch', 'comment_bonus',
+      'completion_delay_seconds', 'max_campaigns_per_user',
       'max_watch_per_day',
     ];
     const updates = {};
@@ -109,6 +112,12 @@ const updateAppSettings = async (req, res, next) => {
         const val = parseInt(req.body[key], 10);
         if (!isNaN(val) && val >= 0) updates[key] = val;
       }
+    }
+    // House margin is now a % (was flat coins) — owner cost = ceil(earn * (1 + margin_pct)).
+    // Clamped to [0,1] so a bad payload can never make cost < earn (no coin minting) or negative.
+    if (req.body.margin_pct !== undefined) {
+      const m = parseFloat(req.body.margin_pct);
+      if (!isNaN(m)) updates.margin_pct = Math.min(1, Math.max(0, m));
     }
     // Non-integer admin controls (validated defensively so a bad payload can't brick the app).
     const TASK_TYPES = ['subscribe', 'like', 'like_comment', 'subscribe_like', 'watch'];
@@ -125,6 +134,17 @@ const updateAppSettings = async (req, res, next) => {
     }
     if (typeof req.body.maintenance_message === 'string') {
       updates.maintenance_message = req.body.maintenance_message.slice(0, 300);
+    }
+    if (typeof req.body.announcement_message === 'string') {
+      updates.announcement_message = req.body.announcement_message.slice(0, 500);
+    }
+    if (typeof req.body.announcement_link === 'string') {
+      const link = req.body.announcement_link.trim().slice(0, 300);
+      // Only an http(s) URL (or empty to clear) — never javascript:/data: etc.
+      updates.announcement_link = /^https?:\/\//i.test(link) ? link : '';
+    }
+    if (['both', 'web', 'mobile'].includes(req.body.announcement_platform)) {
+      updates.announcement_platform = req.body.announcement_platform;
     }
     if (!Object.keys(updates).length) {
       return res.status(400).json({ error: 'No valid settings provided' });
@@ -172,9 +192,11 @@ const getUsers = async (req, res, next) => {
     const page  = Math.max(1, parseInt(req.query.page) || 1);
     const limit = 50;
     const offset = (page - 1) * limit;
-    const email = req.query.email ? `%${req.query.email.toLowerCase()}%` : null;
-    const where = email ? 'WHERE LOWER(email) LIKE $3' : '';
-    const params = email ? [limit, offset, email] : [limit, offset];
+    // Search matches email OR name (powers the admin add-coins autocomplete).
+    const q = (req.query.email || req.query.q || '').trim().toLowerCase();
+    const like = q ? `%${q}%` : null;
+    const where = like ? 'WHERE LOWER(email) LIKE $3 OR LOWER(COALESCE(name,\'\')) LIKE $3' : '';
+    const params = like ? [limit, offset, like] : [limit, offset];
     const orderBy = req.query.sort === 'subs'
       ? 'subscriber_count DESC NULLS LAST, created_at DESC'
       : 'created_at DESC';
@@ -187,8 +209,8 @@ const getUsers = async (req, res, next) => {
       params
     );
     const total = await pool.query(
-      email ? 'SELECT COUNT(*) FROM users WHERE LOWER(email) LIKE $1' : 'SELECT COUNT(*) FROM users',
-      email ? [email] : []
+      like ? 'SELECT COUNT(*) FROM users WHERE LOWER(email) LIKE $1 OR LOWER(COALESCE(name,\'\')) LIKE $1' : 'SELECT COUNT(*) FROM users',
+      like ? [like] : []
     );
     res.json({ users: r.rows, total: parseInt(total.rows[0].count), page, pages: Math.ceil(total.rows[0].count / limit) });
   } catch (err) { next(err); }
@@ -225,4 +247,38 @@ const banUser = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getStatus, getStats, refreshSubs, getAppSettings, updateAppSettings, setModeManual, setRole, getUsers, banUser };
+// POST /admin/coins  { email, amount }  — add (or, with a negative amount, remove) coins
+// for a user. Owner-only, row-locked, balance can never go negative, and every change is
+// written to the transactions ledger for auditability.
+const adjustCoins = async (req, res, next) => {
+  try {
+    if (!(await requireOwner(req, res))) return;
+    const email = (req.body.email || '').trim();
+    const amount = parseInt(req.body.amount, 10);
+    if (!email || !Number.isInteger(amount) || amount === 0)
+      return res.status(400).json({ error: 'email and a non-zero integer amount are required' });
+    if (Math.abs(amount) > 1000000)
+      return res.status(400).json({ error: 'Amount too large (max ±1,000,000).' });
+    const dbc = await pool.connect();
+    try {
+      await dbc.query('BEGIN');
+      const u = await dbc.query('SELECT id, email, name, coins FROM users WHERE LOWER(email)=LOWER($1) FOR UPDATE', [email]);
+      if (!u.rows.length) { await dbc.query('ROLLBACK'); return res.status(404).json({ error: 'User not found' }); }
+      const uid = u.rows[0].id;
+      const before = Number(u.rows[0].coins) || 0;
+      // Clamp a removal so a balance can never go negative.
+      const applied = amount < 0 ? -Math.min(before, -amount) : amount;
+      if (applied === 0) { await dbc.query('ROLLBACK'); return res.status(400).json({ error: 'User has no coins to remove.' }); }
+      await dbc.query('UPDATE users SET coins = coins + $1 WHERE id = $2', [applied, uid]);
+      await dbc.query(
+        `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1,$2,$3,$4)`,
+        [uid, Math.abs(applied), applied >= 0 ? 'earned' : 'spent', `tx:admin_adjust|delta:${applied}`]
+      );
+      await dbc.query('COMMIT');
+      res.json({ ok: true, user: { id: uid, email: u.rows[0].email, name: u.rows[0].name, coins: before + applied }, applied });
+    } catch (e) { await dbc.query('ROLLBACK'); throw e; }
+    finally { dbc.release(); }
+  } catch (err) { next(err); }
+};
+
+module.exports = { getStatus, getStats, refreshSubs, getAppSettings, updateAppSettings, setModeManual, setRole, getUsers, banUser, adjustCoins };

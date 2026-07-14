@@ -35,9 +35,10 @@ const getMe = async (req, res, next) => {
 // Required by Google Play for any app with account creation.
 // Deletes in FK-dependency order inside a transaction (no schema cascades assumed).
 const deleteMe = async (req, res, next) => {
-  const client = await pool.connect();
+  let client = null;
   try {
     const userId = req.userId;
+    client = await pool.connect();
     await client.query('BEGIN');
 
     // Preserve the welcome-bonus flag so deleting + re-signing-up with the same
@@ -91,8 +92,10 @@ const deleteMe = async (req, res, next) => {
 
     await client.query('COMMIT');
     res.json({ ok: true, message: 'Account permanently deleted.' });
-  } catch (err) { await client.query('ROLLBACK'); next(err); }
-  finally { client.release(); }
+  } catch (err) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
+    next(err);
+  } finally { if (client) client.release(); }
 };
 
 module.exports = { getMe, deleteMe, getReferral };

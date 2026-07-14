@@ -54,4 +54,60 @@ async function generateExampleComment(videoTitle, langCode) {
   } finally { clearTimeout(timer); }
 }
 
-module.exports = { generateExampleComment, available };
+// In-memory caches for translated admin broadcasts (maintenance banner + announcement).
+// Key = lang + a space + the source text, so editing the message re-translates; bounded.
+const _tCache = new Map();     // key -> translated text
+const _inflight = new Set();   // keys currently being translated (dedup background calls)
+
+// The actual Gemini call. Returns the translated string, or null on ANY problem (no key,
+// timeout, non-200, safety-block, bad shape). Never throws.
+async function _doTranslate(src, lang) {
+  if (!GEMINI_KEY) return null;
+  const langName = LANG_NAMES[lang] || 'English';
+  const prompt =
+    `Translate the following short app notification into ${langName}. Keep it natural and ` +
+    `concise. PRESERVE exactly any placeholder tokens (for example {{name}}, {x}, %s), emojis, ` +
+    `and line breaks. If it is already in ${langName}, return it unchanged. Return ONLY the ` +
+    `translated text, nothing else.\n\n${src.slice(0, 800)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 400, thinkingConfig: { thinkingBudget: 0 } },
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) { console.warn('[gemini] translate non-ok', res.status); return null; }
+    const data = await res.json();
+    return (data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim() || null;
+  } catch (e) { console.warn('[gemini] translate error:', e.message); return null; }
+  finally { clearTimeout(timer); }
+}
+
+// SYNCHRONOUS + non-blocking. Returns the cached translation if we have it, otherwise the
+// ORIGINAL text immediately, and kicks off a background translation (deduped) to fill the
+// cache for next time. Gemini being slow, down, or blocked can NEVER delay or crash the
+// app — the worst case is the first viewers see the original text until the cache fills.
+function translateMessage(text, langCode) {
+  const src = String(text || '');
+  if (!src.trim()) return src;
+  const lang = LANG_NAMES[langCode] ? langCode : 'en';
+  if (lang === 'en' || !GEMINI_KEY) return src;   // English users see the exact text written
+  const key = lang + ' ' + src;
+  if (_tCache.has(key)) return _tCache.get(key);
+  if (!_inflight.has(key)) {
+    _inflight.add(key);
+    _doTranslate(src, lang)
+      .then((out) => { if (out) { _tCache.set(key, out); if (_tCache.size > 2000) _tCache.delete(_tCache.keys().next().value); } })
+      .catch(() => {})
+      .finally(() => _inflight.delete(key));
+  }
+  return src;   // never awaits Gemini — the app is never blocked
+}
+
+module.exports = { generateExampleComment, available, translateMessage };

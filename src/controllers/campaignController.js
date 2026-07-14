@@ -41,7 +41,7 @@ const resumeCampaign = async (req, res, next) => {
 };
 
 const cancelCampaign = async (req, res, next) => {
-  const client = await pool.connect();
+  let client = null;
   try {
     const taskId = parseInt(req.params.id, 10);
     const task = await assertOwnsTask(taskId, req.userId);
@@ -53,20 +53,18 @@ const cancelCampaign = async (req, res, next) => {
     // Refund exactly what was charged per slot at creation time (stored on the
     // task). Never recompute from live settings — a price change between create
     // and cancel would otherwise refund more (or less) than was actually paid.
-    const appSettings = await settings.getSettings();
-    const margin = appSettings.house_margin ?? 3;
-    const rewardMap = {
-      subscribe:       appSettings.coins_subscribe,
-      like:            appSettings.coins_like,
-      like_comment:    appSettings.coins_like_comment,
-      subscribe_like:  appSettings.coins_subscribe_like,
-      watch:           appSettings.coins_watch,
-    };
     // Fall back to a recomputed cost only for legacy rows created before slot_cost
-    // existed (the migration backfills these, so this is belt-and-suspenders).
-    const legacySlotCost = (rewardMap[task.task_type] || cfg.REWARDS[task.task_type] || 0) + margin;
+    // existed (migrate.js backfills these, so this is belt-and-suspenders). Composed
+    // from the LIVE atoms + margin via the same helper createTask uses.
+    const appSettings = await settings.getSettings();
+    const atoms = {
+      subscribe: appSettings.coins_subscribe, like: appSettings.coins_like,
+      watch_base: appSettings.coins_watch, comment_bonus: appSettings.comment_bonus,
+    };
+    const legacySlotCost = cfg.slotCostFor(task.task_type, task.watch_minutes || 1, atoms, appSettings.margin_pct);
     const slotCost = Number.isFinite(task.slot_cost) && task.slot_cost != null ? task.slot_cost : legacySlotCost;
 
+    client = await pool.connect();
     await client.query('BEGIN');
     // AUTHORITATIVE: lock the task row and re-read remaining_slots + status INSIDE the
     // transaction. verifyTask locks the same row FOR UPDATE before decrementing a slot,
@@ -92,8 +90,10 @@ const cancelCampaign = async (req, res, next) => {
     const bal = await pool.query('SELECT coins FROM users WHERE id=$1', [req.userId]);
     res.json({ ok: true, refunded_coins: refundCoins, refunded_slots: remainingSlots, new_balance: bal.rows[0].coins,
       message: refundCoins > 0 ? `Campaign cancelled. ${refundCoins} coins refunded.` : 'Campaign cancelled.' });
-  } catch (err) { await client.query('ROLLBACK'); next(err); }
-  finally { client.release(); }
+  } catch (err) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
+    next(err);
+  } finally { if (client) client.release(); }
 };
 
 module.exports = { pauseCampaign, resumeCampaign, cancelCampaign };

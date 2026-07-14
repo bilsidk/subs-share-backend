@@ -1,16 +1,64 @@
-const { watchPricing, earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum } = require('../src/lib/economy');
+const { earnedKeysFor, sanitizeExampleIds, commentMeetsMinimum } = require('../src/lib/economy');
 const cfg = require('../src/config');
 
-describe('watchPricing', () => {
-  test('1 minute = base reward; slotCost = reward + margin', () => {
-    expect(watchPricing(1, 4, 3)).toEqual({ reward: 4, slotCost: 7 });
+// Compose-from-atoms economy (Economy & Watch Redesign 2026-07-11): 4 atoms
+// (subscribe 12, like 5, watch_base 2, comment_bonus 8), combos derive, owner
+// slot_cost = ceil(reward × (1 + margin 0.25)). Watch reward is TIERED.
+describe('watchRewardFor — tiered watch curve', () => {
+  test('spec anchor points: 1→2, 10→11, 20→31, 30→61', () => {
+    expect(cfg.watchRewardFor(1)).toBe(2);
+    expect(cfg.watchRewardFor(10)).toBe(11);   // +1/min for minutes 2–10
+    expect(cfg.watchRewardFor(20)).toBe(31);   // +2/min for minutes 11–20
+    expect(cfg.watchRewardFor(30)).toBe(61);   // +3/min for minutes 21+
   });
-  test('extra minutes add per-minute reward', () => {
-    const per = cfg.WATCH_REWARD_PER_EXTRA_MIN;
-    expect(watchPricing(5, 4, 3)).toEqual({ reward: 4 + 4 * per, slotCost: 4 + 4 * per + 3 });
+  test('tier boundaries: 11th minute adds +2, 21st adds +3', () => {
+    expect(cfg.watchRewardFor(11) - cfg.watchRewardFor(10)).toBe(2);
+    expect(cfg.watchRewardFor(21) - cfg.watchRewardFor(20)).toBe(3);
   });
-  test('0/negative minutes clamps extras to 0', () => {
-    expect(watchPricing(0, 4, 3).reward).toBe(4);
+  test('0/negative/garbage minutes clamp to 1 minute (base)', () => {
+    expect(cfg.watchRewardFor(0)).toBe(2);
+    expect(cfg.watchRewardFor(-5)).toBe(2);
+    expect(cfg.watchRewardFor('x')).toBe(2);
+  });
+  test('admin-overridden watch base shifts the whole curve', () => {
+    expect(cfg.watchRewardFor(10, 5)).toBe(14); // 5 base + 9 tier-1 minutes
+  });
+});
+
+describe('rewardFor — combos derive from atoms', () => {
+  test('atoms: subscribe 12, like 5', () => {
+    expect(cfg.rewardFor('subscribe')).toBe(12);
+    expect(cfg.rewardFor('like')).toBe(5);
+  });
+  test('derived combos: subscribe_like 17, like_comment 13 (like + comment bonus)', () => {
+    expect(cfg.rewardFor('subscribe_like')).toBe(17);
+    expect(cfg.rewardFor('like_comment')).toBe(13);
+  });
+  test('live admin atoms override the defaults (combos recompute)', () => {
+    const atoms = { subscribe: 20, like: 10, comment_bonus: 4 };
+    expect(cfg.rewardFor('subscribe_like', 1, atoms)).toBe(30);
+    expect(cfg.rewardFor('like_comment', 1, atoms)).toBe(14);
+  });
+  test('unknown type → 0', () => expect(cfg.rewardFor('nope')).toBe(0));
+});
+
+describe('slotCostFor — cost = ceil(reward × (1+margin)), never below reward', () => {
+  test('default 25% margin: subscribe 15, like 7, like_comment 17, subscribe_like 22, watch(1) 3', () => {
+    expect(cfg.slotCostFor('subscribe')).toBe(15);
+    expect(cfg.slotCostFor('like')).toBe(7);
+    expect(cfg.slotCostFor('like_comment')).toBe(17);
+    expect(cfg.slotCostFor('subscribe_like')).toBe(22);
+    expect(cfg.slotCostFor('watch', 1)).toBe(3);
+  });
+  test('negative margin clamps to 0 (cost can never drop below reward → no minting)', () => {
+    expect(cfg.slotCostFor('subscribe', 1, undefined, -5)).toBe(12);
+  });
+  test('NO-MINT invariant: reward ≤ slotCost for every type × watch duration', () => {
+    for (const t of cfg.TASK_TYPES) {
+      for (const m of [1, 2, 10, 11, 15, 20, 21, 30, 60]) {
+        expect(cfg.rewardFor(t, m)).toBeLessThanOrEqual(cfg.slotCostFor(t, m));
+      }
+    }
   });
 });
 

@@ -15,6 +15,13 @@ const { initOnBoot }    = require('./services/settingsService');
 
 const app = express();
 app.set('trust proxy', 1);
+// When served under a base path (e.g. cPanel/Passenger mounts the app at /api),
+// strip that prefix so the root-mounted routes below still match. No-op at root.
+app.use((req, res, next) => {
+  if (req.url === '/api') req.url = '/';
+  else if (req.url.startsWith('/api/')) req.url = req.url.slice(4);
+  next();
+});
 // CSP off: the web app inlines its scripts and loads Google Identity Services.
 // COOP must allow popups or the GIS sign-in popup can't message back.
 app.use(helmet({

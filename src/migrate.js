@@ -56,8 +56,12 @@ async function runMigration() {
         coins         INTEGER NOT NULL,
         bonus_pct     INTEGER DEFAULT 0,
         status        VARCHAR(20) DEFAULT 'pending',
+        payment_id    VARCHAR(255),
         created_at    TIMESTAMP DEFAULT NOW()
       )`);
+    // NowPayments payment_id, learned from a delivered IPN — a direct-lookup fallback for
+    // the pending-crypto reconcile. Nullable; added here for tables created before it.
+    await pool.query(`ALTER TABLE pending_payments ADD COLUMN IF NOT EXISTS payment_id VARCHAR(255)`);
   } catch (e) { console.error('[migrate] pending_payments:', e.message); }
 
   // 6. Server-stamped task starts — so the verify delay is measured from a time
